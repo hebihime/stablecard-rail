@@ -76,7 +76,9 @@ from app.main import create_app  # noqa: E402
 from app.webhooks import dispatch  # noqa: E402
 from tests.support import SeedIntent  # noqa: E402
 
-TRUNCATED_TABLES = "ledger_events, funding_intents, webhook_dead_letters, chain_cursors"
+TRUNCATED_TABLES = (
+    "ledger_events, funding_intents, webhook_dead_letters, chain_cursors, deposit_routes"
+)
 
 
 async def _create_database_if_missing(url_str: str) -> None:

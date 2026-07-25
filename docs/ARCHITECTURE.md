@@ -1524,3 +1524,43 @@ in the watcher.
 chain, wrong mint, outgoing, below a cent, not ours. It is the same principle as
 ledgering `unmapped` webhooks (§3.9): "nothing happened" and "we decided nothing
 happened" are different, and only one of them can be audited.
+
+### 9.8 The deposit index is a row, not a projection — and §3.4 named the wrong address
+
+§3.4 deferred a `deposit_address → card` index to phase 5 and predicted its shape:
+a projection of the ledger's `card.created` events, which already record a
+`deposit_address` for exactly this purpose. Building the watcher showed the
+prediction was wrong, and the reason is worth keeping because it is a distinction
+the whole pipeline turns on.
+
+**There are two deposit addresses, and they belong to different parties.**
+
+| | Whose | What it is | Who knows it |
+| --- | --- | --- | --- |
+| **Source** | ours | the Solana account the user sends USDC to | this service assigns it (SPEC.md §8's demo deposit keypair) |
+| **Destination** | the card's | the Safe a `CRYPTO_DEPOSIT` issuer credits | the provider, via `Card.deposit_address` |
+
+`card.created` records the *destination*. The watcher polls the *source*, and no
+provider has ever heard of it — so there is nothing to project it from. Hence
+`deposit_routes`: one row per watched address, naming the card it funds.
+
+**What is deliberately not in that row**: the destination address, the card's state,
+its balance. §3.4's argument against a local card table is unchanged — the provider
+owns that, and a second copy is a cache that can silently disagree. The engine asks
+the adapter for the destination when it submits the bridge order.
+
+**`(chain, deposit_address)` is the primary key**, which settles the other question
+§5 left open. It worried that one Safe per user makes `deposit_address → card`
+many-to-one (§7.6) and that the watcher would need a second discriminator — most
+likely a per-intent expected amount. It does not, because that many-to-one mapping
+is about the *destination* address. One source address funds one card, and making a
+second card unrepresentable is a cheaper answer than a tie-break rule that has to be
+right about money. The reverse direction is one-to-many and indexed: a card funded
+from a second chain has a second address, and the fund screen (SPEC.md §9.3) lists
+them.
+
+**Re-pointing an address at a different card is refused**, while re-registering the
+same pair is a no-op. The fund screen will register on every open, so the no-op has
+to be free; and a transfer already in flight to that address was sent for the card
+it pointed at when the sender read it, so silently re-pointing would credit the
+wrong card on arrival.

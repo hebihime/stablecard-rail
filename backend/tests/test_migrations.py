@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 import app.chain.cursors
 import app.funding.models
+import app.funding.routes
 import app.ledger.models
 import app.webhooks.models  # noqa: F401 -- registers tables on Base.metadata
 from app.core.db import Base
@@ -47,6 +48,7 @@ async def test_expected_tables_exist(engine: AsyncEngine) -> None:
         )
     assert names == {
         "chain_cursors",
+        "deposit_routes",
         "funding_intents",
         "ledger_events",
         "webhook_dead_letters",

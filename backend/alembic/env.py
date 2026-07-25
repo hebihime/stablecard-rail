@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import app.chain.cursors
 import app.funding.models
+import app.funding.routes
 import app.ledger.models
 import app.webhooks.models  # noqa: F401 -- registers tables on Base.metadata
 from alembic import context
