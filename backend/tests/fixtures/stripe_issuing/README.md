@@ -19,7 +19,7 @@ and the adapter is what changes.**
 `authorization_pending` · `authorization_declined` · `transactions_all` ·
 `transactions_page_1` · `transactions_page_2` · `authorizations_pending` ·
 `error_resource_missing` · `error_malformed_id` · `error_missing_cardholder` ·
-`error_card_canceled` · `error_idempotency_key_reused` · `events_all` ·
+`error_card_canceled` · `error_idempotency_key_reused` · `event_type_census` ·
 `event_card_created` · `event_card_updated` · `event_authorization_created` ·
 `event_authorization_updated` · `event_transaction_created` ·
 `event_cardholder_created`
@@ -27,6 +27,14 @@ and the adapter is what changes.**
 `event_*` are real Event envelopes from `GET /v1/events`, and **an Event envelope is
 byte-for-byte what a webhook delivers** — which is how the webhook mappings get tested
 against reality without a public URL or an endpoint secret.
+
+`event_type_census` is the distribution of `type` over the last hundred events on the
+account: the provider's own vocabulary, not a payload. Two tests in
+`test_stripe_webhooks.py` read it — one asserting every event name the adapter claims to
+map is a name Stripe actually sends (the event names in `adapter.py` are hand-typed
+strings, and a mapping keyed on a name nobody sends maps nothing, silently), one
+asserting every family Stripe *does* send is either mapped or on a deliberately-ignored
+list.
 
 ## 2. Derived — a recorded card with one stated mutation
 
@@ -49,7 +57,7 @@ Every test using one says so in a comment.
 
 | File | Why the walk never produced it |
 | --- | --- |
-| `event_authorization_request` | only sent to an account with a real-time authorization endpoint |
+| `event_authorization_request` | needs a real-time authorization endpoint — verified unproducible, see below |
 | `event_authorization_expired` | this account's API version (`2026-06-24.dahlia`) spells a lapse `reversed` |
 | `event_authorization_closed` | the capture path closed via the transaction event instead |
 | `event_transaction_capture`, `event_transaction_refund`, `event_transaction_unknown_type` | no refund or refund-reversal occurred |
@@ -60,13 +68,21 @@ Every test using one says so in a comment.
 | `error_rate_limited` | not worth provoking deliberately |
 | `authorizations_none` | an empty list, trivially correct |
 
-## What the recording still does not settle
+## What the recording could not settle, and how it was settled instead
 
-**The signature scheme** (`docs/ARCHITECTURE.md` §8.2). Verifying that Stripe keys its
-HMAC on the whole `whsec_…` string, prefix included, needs an actual inbound delivery
-and `STRIPE_ISSUING_WEBHOOK_SECRET` — a Dashboard endpoint or `stripe listen`. Until
-then `tests/test_stripe_signing.py` proves we are self-consistent, not that Stripe
-agrees.
+**The signature scheme** (`docs/ARCHITECTURE.md` §8.2) is not in these files, because
+no API response contains it: the question is how Stripe signs an *outbound* delivery.
+It was confirmed on 2026-07-26 with `stripe listen` — genuine deliveries verified and
+were ledgered, and returned 401 against a wrong secret. It is not pinned as a fixture
+here, and will not be: verifying a captured delivery requires the endpoint secret, and
+committing a webhook secret to a tracked file breaks a hard rule.
+
+**`event_authorization_request.json` cannot be recorded on this account.** Verified,
+not assumed: `stripe trigger issuing_authorization.request` produces only the
+downstream `issuing_authorization.created`, and `GET /v1/events?type=issuing_
+authorization.request` returns nothing. Stripe creates that event only for an account
+with a real-time authorization endpoint configured, which this pipeline deliberately
+does not serve (§8.7). So it stays authored.
 
 ## Redaction
 

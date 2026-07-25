@@ -659,12 +659,6 @@ Recorded here when their phase lands, per SPEC.md §11:
   interface to save a connection setup would be answering a performance question by
   spending the thing being measured. Still deferred, now with a second adapter's worth
   of evidence that it is only a performance question.
-- **Verifying Stripe's webhook signature scheme against a real delivery** (§8.2). The
-  one thing in §8 a live API key could not settle: it needs
-  `STRIPE_ISSUING_WEBHOOK_SECRET` and an actual inbound webhook, which means a
-  Dashboard endpoint or `stripe listen` with a tunnel. Until then
-  `tests/test_stripe_signing.py` proves we are self-consistent, not that Stripe
-  agrees, and the `whsec_`-prefix question is the single open assumption.
 - **A real-time authorization endpoint**, if the demo should stop seeing occasional
   `cardholder_verification_required` declines (§8.10). Stripe wants a decision inside
   two seconds; this pipeline verifies, dedups and queues (SPEC.md §4), so serving it
@@ -977,18 +971,38 @@ answer:
 - **`v0` is never accepted.** Trusting it would make every Dashboard "send test
   webhook" click a way to write to the ledger.
 
-**This is the one thing in §8 still unverified, and it stayed unverified even after
-the fixtures were recorded (§8.10).** Lithic publishes a worked example, so
-`test_lithic_signing.py` pins our implementation against *their* numbers. Stripe
-publishes no vector, so ours were computed independently of the implementation and
-are regression pins only. They prove we are self-consistent; they cannot prove
-Stripe agrees.
+**Confirmed by a live delivery on 2026-07-26.** It was the last open question in the
+phase, and it could not be answered by an API key: the question is how Stripe *signs
+an outbound delivery*, so it needed `STRIPE_ISSUING_WEBHOOK_SECRET` and a real inbound
+webhook.
 
-An API key does not settle it: the question is how Stripe *signs an outbound
-delivery*, so it needs `STRIPE_ISSUING_WEBHOOK_SECRET` and a real inbound webhook —
-a Dashboard endpoint, or `stripe listen` with a tunnel. Everything else in this
-section has since been checked against a live account; this has not, and the
-`whsec_` prefix is the single assumption one genuine delivery would resolve.
+Method, and the negative control that makes it mean something:
+
+    stripe listen --forward-to 127.0.0.1:8000/webhooks/stripe_issuing
+    stripe trigger issuing_card.created
+
+With the listener's secret in `.env`, three genuine deliveries came back **`200`** and
+appear in `ledger_events` under `webhook:stripe_issuing:evt_…`, mapped as
+`issuing_cardholder.created → unmapped` and `issuing_card.created → card_lifecycle`.
+Restarting the app with a wrong-but-well-formed secret and repeating the trigger gave
+**`401`** on all three. So the 200s were verification passing, not verification being
+skipped, and **the `whsec_` prefix is part of the HMAC key.**
+
+The hex-shaped secret is why this mattered more than it looks. `stripe listen` issues
+`whsec_` followed by 64 hex characters, and hex digits are a subset of the base64
+alphabet — so Lithic's rule (strip the prefix, base64-decode the rest) *succeeds* on a
+Stripe secret and silently yields a different key. There is no error to notice; every
+genuine delivery would simply 401. That is the failure mode
+`test_a_signature_keyed_the_lithic_way_is_rejected` exists to prevent.
+
+**What is deliberately not tested.** The strongest possible test would pin a real
+captured delivery — raw body plus its `Stripe-Signature` — against our verifier in the
+suite. Verifying it requires the endpoint secret, and committing a webhook secret to a
+tracked file breaks a hard rule of this project that outranks the value of the test. So
+the live check is recorded here, with its method and date, and the unit vectors remain
+what they always were: self-consistency pins computed independently of the
+implementation. Lithic still has the stronger position, because Stripe publishes no
+worked example to pin against.
 
 ### 8.3 `inactive` means two things, so the adapter keeps the missing bit
 

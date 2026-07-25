@@ -12,9 +12,17 @@ same" idea goes wrong:
   *and* the signatures; Lithic spreads them across three headers.
 * Stripe sends a `v0` signature on test events which is deliberately not valid.
 
-There is no published worked example to pin this against, unlike Lithic's
-(docs/ARCHITECTURE.md §8.2), so the vectors below were computed independently of
-the implementation and are regression pins, not proof that Stripe agrees.
+There is no published worked example to pin this against, unlike Lithic's, so the
+vectors below were computed independently of the implementation and are regression
+pins rather than proof that Stripe agrees.
+
+**The scheme itself is confirmed**, just not from here: on 2026-07-26 three genuine
+deliveries forwarded by `stripe listen` verified against this code and were ledgered,
+and the same deliveries returned 401 once the secret was changed
+(docs/ARCHITECTURE.md §8.2). Pinning a captured delivery in the suite would be
+stronger still, and is deliberately not done — verifying one needs the endpoint
+secret, and committing a webhook secret to a tracked file is not a trade this project
+makes.
 """
 
 from __future__ import annotations
