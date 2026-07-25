@@ -1,0 +1,26 @@
+{
+  "api_version": "2025-03-31.basil",
+  "created": 1785005001,
+  "data": {
+    "object": {
+      "card": "ic_1SbCardStablecard0001",
+      "created": 1785005000,
+      "device_fingerprint": "fp_stablecard",
+      "id": "iss_tok_1SbTokenStable001",
+      "livemode": false,
+      "network": "visa",
+      "object": "issuing.token",
+      "status": "requested",
+      "wallet_provider": "apple_pay"
+    }
+  },
+  "id": "evt_1SbEvToken0000001",
+  "livemode": false,
+  "object": "event",
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "issuing_token.created"
+}

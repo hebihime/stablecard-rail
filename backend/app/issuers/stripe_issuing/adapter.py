@@ -45,6 +45,8 @@ a time.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import uuid
 from collections.abc import Callable, Mapping
@@ -55,6 +57,7 @@ from app.core.money import Money
 from app.issuers.base import (
     Card,
     CardEvent,
+    CardEventType,
     Cardholder,
     CardholderNotFoundError,
     CardIssuerAdapter,
@@ -68,10 +71,13 @@ from app.issuers.base import (
     FundingStatus,
     IllegalCardTransitionError,
     IssuerError,
+    WebhookParseError,
 )
 from app.issuers.stripe_issuing.client import StripeApiError, StripeClient
 from app.issuers.stripe_issuing.config import get_stripe_issuing_settings
-from app.issuers.stripe_issuing.signing import DEFAULT_TOLERANCE_SECONDS
+from app.issuers.stripe_issuing.signing import DEFAULT_TOLERANCE_SECONDS, verify
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_ID = "stripe_issuing"
 
@@ -91,6 +97,53 @@ TARGET_STATUSES: Mapping[CardState, str] = {
     CardState.FROZEN: "inactive",
     CardState.CANCELED: "canceled",
 }
+
+#: Provider event types this adapter has an opinion about (SPEC.md §3.3). Every
+#: other `issuing_*` event — and every event family Stripe adds later — arrives as
+#: `UNMAPPED` under its own label rather than as a near-miss.
+AUTHORIZATION_CREATED = "issuing_authorization.created"
+AUTHORIZATION_UPDATED = "issuing_authorization.updated"
+TRANSACTION_CREATED = "issuing_transaction.created"
+
+#: Statuses an authorization moves to when its hold is given back. Two spellings for
+#: one fact: `expired` exists from Stripe's 2025-03-31 version and earlier versions
+#: report a lapse as `reversed`. Mapping both is what makes pinning `Stripe-Version`
+#: unnecessary for correctness (`config.api_version`).
+AUTHORIZATION_RELEASED_STATUSES = frozenset({"reversed", "expired"})
+
+#: Provider transaction type -> ours. `refund_reversal` is deliberately absent: it
+#: has no normalized equivalent, and calling it a refund would move money the wrong
+#: way in the ledger.
+TRANSACTION_TYPES: Mapping[str, CardEventType] = {
+    "capture": CardEventType.SETTLEMENT,
+    "refund": CardEventType.REFUND,
+}
+
+#: Events about a card itself. Listed explicitly rather than matched by prefix,
+#: because `issuing_cardholder.` and `issuing_card.` differ by one character.
+CARD_LIFECYCLE_EVENTS = frozenset({"issuing_card.created", "issuing_card.updated"})
+
+#: Events about a cardholder. Not card lifecycle events: nothing in `CardEventType`
+#: fits, and CARD_LIFECYCLE would be a lie about what changed.
+CARDHOLDER_EVENTS = frozenset({"issuing_cardholder.created", "issuing_cardholder.updated"})
+
+#: Every dispute event, all of which are the same normalized thing to a ledger.
+DISPUTE_EVENTS = frozenset(
+    {
+        "issuing_dispute.created",
+        "issuing_dispute.submitted",
+        "issuing_dispute.updated",
+        "issuing_dispute.closed",
+        "issuing_dispute.funds_reinstated",
+        "issuing_dispute.funds_rescinded",
+    }
+)
+
+#: Not mapped by anything here, and that is a finding rather than a gap: Stripe
+#: delivers a cardholder's verification code itself and publishes no issuer-facing
+#: 3DS challenge webhook, so this adapter never produces `THREE_DS_CHALLENGE`.
+#: Phase 7 gets that path from the mock adapter's simulator (SPEC.md §6,
+#: docs/ARCHITECTURE.md §8.8).
 
 #: The only spending-limit interval that behaves like a balance. `daily`,
 #: `monthly` and the rest reset, and funding would leak away with them.
@@ -528,10 +581,258 @@ class StripeIssuingAdapter(CardIssuerAdapter):
     # ------------------------------------------------------------ webhooks ----
 
     async def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
-        raise NotImplementedError("phase 4e")
+        if not self._secret:
+            # Fail closed. An account with no endpoint secret yet has nothing to
+            # verify against, and accepting unverifiable deliveries would let anyone
+            # write to the ledger.
+            logger.warning("stripe webhook rejected: STRIPE_ISSUING_WEBHOOK_SECRET is not set")
+            return False
+        return verify(
+            self._secret,
+            headers=headers,
+            body=body,
+            now=self._clock(),
+            tolerance_seconds=self._tolerance_seconds,
+        )
+
+    def webhook_event_id(self, headers: Mapping[str, str], body: bytes) -> str | None:
+        """The Event's own `evt_…` id, read from the body before parsing.
+
+        The other half of phase 3's interface change (docs/ARCHITECTURE.md §4.1):
+        Lithic's delivery id is in a header and Stripe's is in the body, and the
+        widened signature carries both. It is inside the signed content either way,
+        which is what stops a captured delivery being relabelled as a new event and
+        processed twice.
+
+        Answers `None` rather than raising on an unreadable body: the receiver falls
+        back to a digest of the body, and a 500 here would be worse than a dedup key
+        we had to derive ourselves.
+        """
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return _optional_str(payload.get("id"))
 
     async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
-        raise NotImplementedError("phase 4e")
+        """Normalize one delivery.
+
+        Everything needed is in the body: Stripe wraps the changed object in an
+        Event envelope carrying an id, a type, a timestamp and — when the change was
+        ours — the idempotency key we sent. The headers are unused here, and that is
+        the point of having widened the signature rather than special-cased it.
+        """
+        payload = _read_envelope(body)
+        event_id = _optional_str(payload.get("id"))
+        if not event_id:
+            raise WebhookParseError(
+                "delivery has no string `id`, so it has no id to dedup on. Generating "
+                "one would make every redelivery look like a new event."
+            )
+        provider_type = _optional_str(payload.get("type"))
+        if not provider_type:
+            raise WebhookParseError("delivery has no string `type`")
+
+        data = payload.get("data")
+        envelope = data if isinstance(data, Mapping) else {}
+        obj = envelope.get("object")
+        previous = envelope.get("previous_attributes")
+
+        common: dict[str, Any] = {
+            "provider_id": self.provider_id,
+            "event_id": event_id,
+            "provider_event_type": provider_type,
+            "occurred_at": _utc(payload.get("created"), fallback=self._clock()),
+            "raw": {
+                "event_type": provider_type,
+                "api_version": payload.get("api_version"),
+                "livemode": payload.get("livemode"),
+                # Carries our own idempotency key back when the change was ours,
+                # which is how a handler ties an event to the call that caused it.
+                "request": payload.get("request"),
+                "object": _collapse_expansions(obj) if isinstance(obj, Mapping) else None,
+                "previous_attributes": previous if isinstance(previous, Mapping) else None,
+            },
+        }
+        if not isinstance(obj, Mapping):
+            # Authentic and readable, so re-sending it changes nothing: better in the
+            # ledger as unmapped than in the dead-letter table.
+            return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+
+        common["card_id"] = _event_card_id(provider_type, obj)
+        common["cardholder_id"] = _event_cardholder_id(provider_type, obj)
+
+        if provider_type == AUTHORIZATION_CREATED:
+            return CardEvent(
+                **common, event_type=CardEventType.AUTHORIZATION, amount=_event_amount(obj)
+            )
+        if provider_type == AUTHORIZATION_UPDATED:
+            return _authorization_update(common, obj, previous)
+        if provider_type == TRANSACTION_CREATED:
+            return _transaction_event(common, obj)
+        if provider_type in CARD_LIFECYCLE_EVENTS:
+            return CardEvent(
+                **common,
+                event_type=CardEventType.CARD_LIFECYCLE,
+                card_state=_reported_card_state(obj),
+            )
+        if provider_type in DISPUTE_EVENTS:
+            return CardEvent(
+                **common, event_type=CardEventType.CHARGEBACK, amount=_event_amount(obj)
+            )
+        # Never dropped: recorded under the provider's own label (SPEC.md §3.3).
+        # `issuing_authorization.request` lands here on purpose — it is a two-second
+        # request for a decision, not a record that money moved, and this pipeline
+        # verifies, dedups and queues rather than deciding inline (SPEC.md §4).
+        return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+
+
+# ---------------------------------------------------------------- webhooks ----
+
+
+def _read_envelope(body: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise WebhookParseError(f"delivery body is not JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise WebhookParseError(
+            f"delivery body must be a JSON object, got {type(payload).__name__}"
+        )
+    return payload
+
+
+def _event_card_id(provider_type: str, obj: Mapping[str, Any]) -> str | None:
+    """The card a delivery is about.
+
+    On a card event the object *is* the card; everywhere else it names one. The two
+    event families are listed explicitly rather than matched by prefix, because
+    `issuing_cardholder.` and `issuing_card.` differ by one character.
+    """
+    if provider_type in CARD_LIFECYCLE_EVENTS:
+        return _optional_str(obj.get("id"))
+    return _reference(obj.get("card"))
+
+
+def _event_cardholder_id(provider_type: str, obj: Mapping[str, Any]) -> str | None:
+    if provider_type in CARDHOLDER_EVENTS:
+        return _optional_str(obj.get("id"))
+    return _reference(obj.get("cardholder"))
+
+
+def _authorization_update(
+    common: dict[str, Any], obj: Mapping[str, Any], previous: object
+) -> CardEvent:
+    """An `issuing_authorization.updated`, keyed on the status it moved to.
+
+    Only a release is a normalized event. A move to `closed` is the *other* half of
+    a capture — Stripe also sends `issuing_transaction.created` for it — and mapping
+    both would double-count every card payment in the ledger. `pending` updates
+    (an approved incremental authorization) have no normalized equivalent either.
+    """
+    status = _optional_str(obj.get("status")) or "unknown"
+    if status in AUTHORIZATION_RELEASED_STATUSES:
+        return CardEvent(
+            **common,
+            event_type=CardEventType.AUTHORIZATION_REVERSAL,
+            amount=_released_amount(obj, previous),
+        )
+    return CardEvent(
+        **{**common, "provider_event_type": f"{common['provider_event_type']}:{status}"},
+        event_type=CardEventType.UNMAPPED,
+    )
+
+
+def _released_amount(obj: Mapping[str, Any], previous: object) -> Money | None:
+    """What a reversal or expiry gave back.
+
+    Stripe zeroes `amount` when an authorization is voided, so the magnitude that
+    was actually released survives only in `data.previous_attributes` — which is
+    precisely what that field is for. Absent it, report what the object says even
+    when that is zero: an invented figure would be worse than an uninformative one.
+    """
+    if isinstance(previous, Mapping):
+        released = previous.get("amount")
+        if not isinstance(released, bool) and isinstance(released, int):
+            return Money(abs(released), _event_currency(obj))
+    return _event_amount(obj)
+
+
+def _transaction_event(common: dict[str, Any], obj: Mapping[str, Any]) -> CardEvent:
+    kind = _optional_str(obj.get("type")) or "unknown"
+    mapped = TRANSACTION_TYPES.get(kind)
+    if mapped is None:
+        # `refund_reversal` and anything else they add: calling it a near-miss would
+        # move money the wrong way in the ledger.
+        return CardEvent(
+            **{**common, "provider_event_type": f"{common['provider_event_type']}:{kind}"},
+            event_type=CardEventType.UNMAPPED,
+        )
+    return CardEvent(**common, event_type=mapped, amount=_event_amount(obj))
+
+
+def _event_amount(obj: Mapping[str, Any]) -> Money | None:
+    """One object's amount, in integer minor units, unsigned.
+
+    Stripe signs these — a capture is negative, a refund positive — and
+    `CardEventType` already says which way the money went, so a sign here would
+    only invite double negation downstream. The signed original stays in `raw`.
+    """
+    amount = obj.get("amount")
+    if amount is None:
+        return None
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise WebhookParseError(
+            f"event amount must be integer minor units, got {type(amount).__name__} ({amount!r})"
+        )
+    return Money(abs(amount), _event_currency(obj))
+
+
+def _event_currency(obj: Mapping[str, Any]) -> str:
+    return str(obj.get("currency") or "usd").upper()
+
+
+def _reported_card_state(obj: Mapping[str, Any]) -> CardState | None:
+    """The card state a lifecycle delivery reports, or `None` if unrecognized.
+
+    Still a lifecycle event either way — but a guessed state is a claim about
+    whether the card can spend.
+    """
+    status = _optional_str(obj.get("status")) or ""
+    if status not in CARD_STATUSES:
+        return None
+    return _card_state(status, _our_metadata(obj))
+
+
+def _collapse_expansions(obj: Mapping[str, Any]) -> dict[str, Any]:
+    """The event's object, with nested expansions reduced to the ids they came from.
+
+    A deliberate divergence from `lithic/adapter.py`, which keeps its webhook
+    payloads untouched because they are flat. Stripe expands: an
+    `issuing_card.created` delivery embeds the whole cardholder, name and postal
+    address included, and `raw` reaches the ledger's payload column. Collapsing is
+    narrow on purpose — only a nested Stripe object goes, because only a nested
+    Stripe object can carry somebody's name — so `merchant_data`, `amount_details`
+    and `request_history` survive intact.
+    """
+    return {key: _collapsed(value) for key, value in obj.items()}
+
+
+def _collapsed(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        if _is_stripe_object(value):
+            return _optional_str(value.get("id"))
+        return {key: _collapsed(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_collapsed(item) for item in value]
+    return value
+
+
+def _is_stripe_object(value: Mapping[str, Any]) -> bool:
+    """Whether a nested mapping is an expanded API object rather than a plain field."""
+    return isinstance(value.get("object"), str) and isinstance(value.get("id"), str)
 
 
 # ------------------------------------------------------------------- state ----

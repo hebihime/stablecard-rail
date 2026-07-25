@@ -1,0 +1,76 @@
+{
+  "api_version": "2025-03-31.basil",
+  "created": 1785003000,
+  "data": {
+    "object": {
+      "amount": 3000,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "approved": true,
+      "authorization_method": "online",
+      "balance_transactions": [],
+      "card": {
+        "brand": "Visa",
+        "currency": "usd",
+        "exp_month": 8,
+        "exp_year": 2029,
+        "id": "ic_1SbCardStablecard0001",
+        "last4": "4242",
+        "object": "issuing.card",
+        "status": "active",
+        "type": "virtual"
+      },
+      "cardholder": "ich_1SbHolderStablecard01",
+      "created": 1785003000,
+      "currency": "usd",
+      "id": "iauth_1SbAuthStablecard003",
+      "livemode": false,
+      "merchant_amount": 3000,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "hotels_motels_resorts",
+        "category_code": "7011",
+        "city": "NEW YORK",
+        "country": "US",
+        "name": "THE ANALYTICAL HOTEL",
+        "network_id": "1234567890",
+        "postal_code": "10128",
+        "state": "NY"
+      },
+      "metadata": {},
+      "object": "issuing.authorization",
+      "pending_request": {
+        "amount": 3000,
+        "amount_details": {
+          "atm_fee": null,
+          "cashback_amount": null
+        },
+        "currency": "usd",
+        "is_amount_controllable": false,
+        "merchant_amount": 3000,
+        "merchant_currency": "usd"
+      },
+      "request_history": [],
+      "status": "pending",
+      "transactions": [],
+      "verification_data": {
+        "address_line1_check": "not_provided",
+        "address_postal_code_check": "not_provided",
+        "cvc_check": "match",
+        "expiry_check": "match"
+      },
+      "wallet": null
+    }
+  },
+  "id": "evt_1SbEvAuthRequest001",
+  "livemode": false,
+  "object": "event",
+  "pending_webhooks": 1,
+  "request": {
+    "id": null,
+    "idempotency_key": null
+  },
+  "type": "issuing_authorization.request"
+}
