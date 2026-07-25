@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     #: adapters (phases 3 and 4) get required settings with no defaults.
     evm_deposit_mock_webhook_secret: str = "dev-mock-webhook-secret-not-a-credential"
 
+    #: Lithic sandbox (SPEC.md §3.2, phase 3). The key and the webhook secret are
+    #: real credentials, so they default to empty rather than to a value: the
+    #: adapter refuses to build without a key, which fails at the one call that
+    #: needs it instead of on every import. The base URL defaults to the sandbox
+    #: so that a misconfigured environment cannot reach production by omission.
+    lithic_api_base_url: str = "https://sandbox.lithic.com/v1"
+    lithic_api_key: str = ""
+    lithic_webhook_secret: str = ""
+    lithic_request_timeout_seconds: float = 15.0
+
 
 @lru_cache
 def get_settings() -> Settings:

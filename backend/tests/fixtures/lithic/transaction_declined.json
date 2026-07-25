@@ -1,0 +1,120 @@
+{
+  "account_token": "6835fb31-fe8b-4694-a9d6-f3b951856378",
+  "acquirer_fee": 0,
+  "acquirer_reference_number": null,
+  "amount": 10000000,
+  "amounts": {
+    "cardholder": {
+      "amount": 0,
+      "conversion_rate": "1.000000",
+      "currency": "USD"
+    },
+    "hold": {
+      "amount": 0,
+      "currency": "USD"
+    },
+    "merchant": {
+      "amount": 0,
+      "currency": "USD"
+    },
+    "settlement": {
+      "amount": 0,
+      "currency": "USD"
+    }
+  },
+  "authorization_amount": 10000000,
+  "authorization_code": null,
+  "avs": null,
+  "card_token": "bc2d875e-a9f4-4222-8565-a35d9701cb0e",
+  "cardholder_authentication": null,
+  "created": "2026-07-25T06:17:40Z",
+  "events": [
+    {
+      "account_type": null,
+      "amount": 10000000,
+      "amounts": {
+        "cardholder": {
+          "amount": 10000000,
+          "conversion_rate": "1.000000",
+          "currency": "USD"
+        },
+        "hold": {
+          "amount": 10000000,
+          "currency": "USD"
+        },
+        "merchant": {
+          "amount": 10000000,
+          "currency": "USD"
+        },
+        "settlement": null
+      },
+      "created": "2026-07-25T06:17:40Z",
+      "detailed_results": [
+        "CARD_SPEND_LIMIT_EXCEEDED"
+      ],
+      "effective_polarity": "DEBIT",
+      "network_info": {
+        "acquirer": {
+          "acquirer_reference_number": null,
+          "retrieval_reference_number": "6025LPZPKPVK"
+        },
+        "amex": null,
+        "mastercard": null,
+        "visa": {
+          "original_transaction_id": null,
+          "transaction_id": "582448599279219"
+        }
+      },
+      "network_specific_data": null,
+      "result": "USER_TRANSACTION_LIMIT",
+      "rule_results": [],
+      "token": "09c1c1c6-3410-4e05-8fec-b6c14c55166b",
+      "type": "AUTHORIZATION"
+    }
+  ],
+  "family": "CARD",
+  "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+  "merchant": {
+    "acceptor_id": "OODKZAPJVN4YS7O",
+    "acquiring_institution_id": "",
+    "city": "NEW YORK",
+    "country": "USA",
+    "descriptor": "OVER LIMIT",
+    "mcc": "5945",
+    "phone_number": null,
+    "postal_code": null,
+    "state": "NY",
+    "street_address": null
+  },
+  "merchant_amount": 10000000,
+  "merchant_authorization_amount": 10000000,
+  "merchant_currency": "USD",
+  "network": "VISA",
+  "network_risk_score": null,
+  "pos": {
+    "entry_mode": {
+      "card": "UNKNOWN",
+      "cardholder": "UNKNOWN",
+      "pan": "4111111111111111",
+      "pin_entered": false
+    },
+    "terminal": {
+      "acceptor_terminal_id": null,
+      "attended": false,
+      "card_retention_capable": false,
+      "on_premise": true,
+      "operator": "UNKNOWN",
+      "partial_approval_capable": false,
+      "pin_capability": "UNSPECIFIED",
+      "type": "PHONE"
+    }
+  },
+  "result": "USER_TRANSACTION_LIMIT",
+  "service_location": null,
+  "settled_amount": 0,
+  "status": "DECLINED",
+  "tags": {},
+  "token": "41383082-4bf2-4056-b739-4900258fb5ee",
+  "token_info": null,
+  "updated": "2026-07-25T06:17:40Z"
+}

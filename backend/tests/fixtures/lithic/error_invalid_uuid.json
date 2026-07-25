@@ -1,0 +1,4 @@
+{
+  "debugging_request_id": "ed8cb71c-b559-4521-9d47-1d06c03168e0",
+  "message": "Invalid parameter: card_token must be a valid UUID."
+}

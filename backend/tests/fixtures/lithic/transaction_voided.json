@@ -1,0 +1,162 @@
+{
+  "account_token": "6835fb31-fe8b-4694-a9d6-f3b951856378",
+  "acquirer_fee": 0,
+  "acquirer_reference_number": null,
+  "amount": 0,
+  "amounts": {
+    "cardholder": {
+      "amount": 0,
+      "conversion_rate": "1.000000",
+      "currency": "USD"
+    },
+    "hold": {
+      "amount": 0,
+      "currency": "USD"
+    },
+    "merchant": {
+      "amount": 0,
+      "currency": "USD"
+    },
+    "settlement": {
+      "amount": 0,
+      "currency": "USD"
+    }
+  },
+  "authorization_amount": 0,
+  "authorization_code": "7BE052",
+  "avs": null,
+  "card_token": "bc2d875e-a9f4-4222-8565-a35d9701cb0e",
+  "cardholder_authentication": null,
+  "created": "2026-07-25T06:16:58Z",
+  "events": [
+    {
+      "account_type": "DEFAULT",
+      "amount": 500,
+      "amounts": {
+        "cardholder": {
+          "amount": 500,
+          "conversion_rate": "1.000000",
+          "currency": "USD"
+        },
+        "hold": {
+          "amount": 500,
+          "currency": "USD"
+        },
+        "merchant": {
+          "amount": 500,
+          "currency": "USD"
+        },
+        "settlement": null
+      },
+      "created": "2026-07-25T06:16:58Z",
+      "detailed_results": [
+        "APPROVED"
+      ],
+      "effective_polarity": "DEBIT",
+      "network_info": {
+        "acquirer": {
+          "acquirer_reference_number": null,
+          "retrieval_reference_number": "6025APJFCHZF"
+        },
+        "amex": null,
+        "mastercard": null,
+        "visa": {
+          "original_transaction_id": null,
+          "transaction_id": "586330963098839"
+        }
+      },
+      "network_specific_data": null,
+      "result": "APPROVED",
+      "rule_results": [],
+      "token": "342049cd-8452-4d52-8211-a9b8d589069a",
+      "type": "AUTHORIZATION"
+    },
+    {
+      "account_type": null,
+      "amount": -500,
+      "amounts": {
+        "cardholder": {
+          "amount": 500,
+          "conversion_rate": "1.000000",
+          "currency": "USD"
+        },
+        "hold": {
+          "amount": 500,
+          "currency": "USD"
+        },
+        "merchant": {
+          "amount": 500,
+          "currency": "USD"
+        },
+        "settlement": null
+      },
+      "created": "2026-07-25T06:17:01Z",
+      "detailed_results": [
+        "APPROVED"
+      ],
+      "effective_polarity": "CREDIT",
+      "network_info": {
+        "acquirer": {
+          "acquirer_reference_number": null,
+          "retrieval_reference_number": "6025SDCPGQWC"
+        },
+        "amex": null,
+        "mastercard": null,
+        "visa": {
+          "original_transaction_id": null,
+          "transaction_id": "586330963098839"
+        }
+      },
+      "network_specific_data": null,
+      "result": "APPROVED",
+      "rule_results": [],
+      "token": "0c4784e8-8af0-43f6-9105-22a5b393a697",
+      "type": "AUTHORIZATION_REVERSAL"
+    }
+  ],
+  "family": "CARD",
+  "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+  "merchant": {
+    "acceptor_id": "OODKZAPJVN4YS7O",
+    "acquiring_institution_id": "",
+    "city": "NEW YORK",
+    "country": "USA",
+    "descriptor": "VOID ME",
+    "mcc": "6010",
+    "phone_number": null,
+    "postal_code": null,
+    "state": "NY",
+    "street_address": null
+  },
+  "merchant_amount": 0,
+  "merchant_authorization_amount": 0,
+  "merchant_currency": "USD",
+  "network": "VISA",
+  "network_risk_score": null,
+  "pos": {
+    "entry_mode": {
+      "card": "UNKNOWN",
+      "cardholder": "UNKNOWN",
+      "pan": "4111111111111111",
+      "pin_entered": false
+    },
+    "terminal": {
+      "acceptor_terminal_id": null,
+      "attended": false,
+      "card_retention_capable": false,
+      "on_premise": true,
+      "operator": "UNKNOWN",
+      "partial_approval_capable": false,
+      "pin_capability": "UNSPECIFIED",
+      "type": "PHONE"
+    }
+  },
+  "result": "APPROVED",
+  "service_location": null,
+  "settled_amount": 0,
+  "status": "VOIDED",
+  "tags": {},
+  "token": "82d9e0c8-cddd-4eba-a231-8e41bfae0947",
+  "token_info": null,
+  "updated": "2026-07-25T06:17:36Z"
+}

@@ -1,0 +1,124 @@
+{
+  "account_token": "6835fb31-fe8b-4694-a9d6-f3b951856378",
+  "acquirer_fee": 0,
+  "acquirer_reference_number": null,
+  "amount": -250,
+  "amounts": {
+    "cardholder": {
+      "amount": 250,
+      "conversion_rate": "1.000000",
+      "currency": "USD"
+    },
+    "hold": {
+      "amount": 0,
+      "currency": "USD"
+    },
+    "merchant": {
+      "amount": 250,
+      "currency": "USD"
+    },
+    "settlement": {
+      "amount": 250,
+      "currency": "USD"
+    }
+  },
+  "authorization_amount": 0,
+  "authorization_code": null,
+  "avs": null,
+  "card_token": "bc2d875e-a9f4-4222-8565-a35d9701cb0e",
+  "cardholder_authentication": null,
+  "created": "2026-07-25T06:17:36Z",
+  "events": [
+    {
+      "account_type": null,
+      "amount": -250,
+      "amounts": {
+        "cardholder": {
+          "amount": 0,
+          "conversion_rate": "1.000000",
+          "currency": "USD"
+        },
+        "hold": {
+          "amount": 0,
+          "currency": "USD"
+        },
+        "merchant": {
+          "amount": 250,
+          "currency": "USD"
+        },
+        "settlement": {
+          "amount": 250,
+          "conversion_rate": "1.000000",
+          "currency": "USD"
+        }
+      },
+      "created": "2026-07-25T06:17:36Z",
+      "detailed_results": [
+        "APPROVED"
+      ],
+      "effective_polarity": "CREDIT",
+      "network_info": {
+        "acquirer": {
+          "acquirer_reference_number": null,
+          "retrieval_reference_number": "6025ZEOVZHVG"
+        },
+        "amex": null,
+        "mastercard": null,
+        "visa": {
+          "original_transaction_id": null,
+          "transaction_id": "749813884294427"
+        }
+      },
+      "network_specific_data": null,
+      "result": "APPROVED",
+      "rule_results": [],
+      "token": "3b52072e-72ab-479f-b970-fb138e08e85b",
+      "type": "RETURN"
+    }
+  ],
+  "family": "CARD",
+  "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+  "merchant": {
+    "acceptor_id": "298864231397756",
+    "acquiring_institution_id": "",
+    "city": "NEW YORK",
+    "country": "USA",
+    "descriptor": "REFUND SHOP",
+    "mcc": "1146",
+    "phone_number": null,
+    "postal_code": null,
+    "state": "NY",
+    "street_address": null
+  },
+  "merchant_amount": -250,
+  "merchant_authorization_amount": 0,
+  "merchant_currency": "USD",
+  "network": "VISA",
+  "network_risk_score": null,
+  "pos": {
+    "entry_mode": {
+      "card": "UNKNOWN",
+      "cardholder": "UNKNOWN",
+      "pan": "4111111111111111",
+      "pin_entered": false
+    },
+    "terminal": {
+      "acceptor_terminal_id": null,
+      "attended": false,
+      "card_retention_capable": false,
+      "on_premise": true,
+      "operator": "UNKNOWN",
+      "partial_approval_capable": false,
+      "pin_capability": "UNSPECIFIED",
+      "type": "PHONE"
+    }
+  },
+  "result": "APPROVED",
+  "service_location": null,
+  "settled_amount": -250,
+  "status": "SETTLED",
+  "tags": {},
+  "token": "96daaa1a-12e0-4ab2-b2e7-8b896b64b34e",
+  "token_info": null,
+  "updated": "2026-07-25T06:17:36Z"
+}
