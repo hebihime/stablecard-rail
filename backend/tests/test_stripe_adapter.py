@@ -37,8 +37,10 @@ import httpx
 import pytest
 import respx
 
+from app.issuers import registry
 from app.issuers.base import (
     CardholderNotFoundError,
+    CardIssuerAdapter,
     CardNotFoundError,
     CardState,
     CreateCardholderRequest,
@@ -812,6 +814,41 @@ async def test_a_five_hundred_on_a_transition_is_not_a_transition_problem(
 
 
 # ------------------------------------------------------------------ factory ----
+
+
+def test_the_adapter_is_registered_by_importing_the_package() -> None:
+    # The whole claim, from the outside: the app imports `app.issuers` and a third
+    # provider resolves. The only production line phase 4 added outside its own
+    # package is the `register()` call that makes this true.
+    assert PROVIDER_ID in registry.known_providers()
+
+
+def test_the_registry_resolves_it_through_the_interface_alone() -> None:
+    resolved = registry.get_adapter(PROVIDER_ID)
+
+    assert isinstance(resolved, CardIssuerAdapter)
+    assert resolved.provider_id == PROVIDER_ID
+
+
+def test_the_taxonomy_now_has_two_real_fiat_rails_and_one_crypto_deposit() -> None:
+    # SPEC.md §3.2's point: both funding models are covered, and `GET /providers`
+    # gained this row without a change in `api/` (docs/ARCHITECTURE.md §8.6).
+    described = dict(registry.describe())
+
+    assert described[PROVIDER_ID] is FundingModel.FIAT_RAIL
+    assert described["lithic"] is FundingModel.FIAT_RAIL
+    assert described["gnosis_pay_mock"] is FundingModel.CRYPTO_DEPOSIT
+
+
+def test_describing_the_providers_does_not_need_stripe_credentials() -> None:
+    # `describe()` builds every registered adapter. Lithic's client validates its key
+    # in the constructor, so that call already depends on LITHIC_API_KEY being set
+    # (reported, not changed — it is phase 3's behaviour). This adapter must not add
+    # a second such dependency, or `GET /providers` would need two credentials to
+    # answer at all.
+    registry.reset_instances()
+
+    assert PROVIDER_ID in dict(registry.describe())
 
 
 def test_the_adapter_builds_from_its_own_settings_without_credentials(

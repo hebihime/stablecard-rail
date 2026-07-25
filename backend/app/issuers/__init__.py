@@ -17,6 +17,7 @@ from __future__ import annotations
 from app.issuers.gnosis_pay_mock import GnosisPayMockAdapter
 from app.issuers.lithic import LithicAdapter
 from app.issuers.registry import register
+from app.issuers.stripe_issuing import StripeIssuingAdapter
 
 # --- the registry ----------------------------------------------------------
 register(GnosisPayMockAdapter.provider_id, GnosisPayMockAdapter.from_settings)
@@ -24,4 +25,12 @@ register(GnosisPayMockAdapter.provider_id, GnosisPayMockAdapter.from_settings)
 # an environment with no Lithic credentials still starts, and only a call that needs
 # them fails (with a message naming the variable).
 register(LithicAdapter.provider_id, LithicAdapter.from_settings)
-# phase 4: register(StripeIssuingAdapter.provider_id, StripeIssuingAdapter.from_settings)
+# Phase 4, and the whole claim in one line: a second real provider arrived as a
+# package under `issuers/` plus this. Nothing in `funding/`, `ledger/`, `webhooks/`,
+# `api/` or `core/` changed, and no route, handler, migration or mobile screen did
+# either. `GET /providers` gained it by way of `registry.describe()` — which is also
+# why this factory, unlike Lithic's, builds without credentials: `describe()`
+# instantiates every registered adapter, so one that refused to exist without a key
+# would take that endpoint down for the providers that have one
+# (docs/ARCHITECTURE.md §8.6).
+register(StripeIssuingAdapter.provider_id, StripeIssuingAdapter.from_settings)

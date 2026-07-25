@@ -9,8 +9,13 @@ else is decided and implemented.
 
 Sections are grouped by when they were decided: §2 phase 1, §3 phase 2, §4 phase 3,
 §7 the refactor that followed SPEC.md's revision to name Gnosis Pay as the target
-provider. §5 (deferred) and §6 (the module rule) are standing sections. Earlier
-sections are not rewritten when a later one changes something; they point forward.
+provider, §8 phase 4. §5 (deferred) and §6 (the module rule) are standing sections.
+Earlier sections are not rewritten when a later one changes something; they point
+forward.
+
+§8 is the one to read first if you want to know whether the adapter abstraction
+works: phase 4 exists to test it with a second real provider, and §8 records what
+that cost.
 
 ---
 
@@ -636,17 +641,33 @@ Recorded here when their phase lands, per SPEC.md §11:
 - **`deposit_address → card` index** for the chain watcher, projected from the
   ledger's `card.created` events — phase 5 (see §3.4).
 - **Reconciler thresholds** for stuck intents — phase 5.
-- **A retryable marker on issuer errors.** `lithic/client.py` already knows which
-  failures are worth retrying (429, 5xx, timeouts) and retries them itself, but that
-  knowledge cannot cross `issuers/base.py` — so the funding engine cannot yet tell
-  "the provider is busy" from "the provider refused". Phase 5 needs the distinction to
-  decide between a retry and a `FAILED` intent; adding it before there is a consumer
-  would be guessing at the shape.
-- **A pooled HTTP client with a shutdown hook.** `lithic/client.py` opens a
-  connection per request to avoid putting a resource lifetime on the issuer interface
-  (§4.3). A production path pools connections and closes them from a FastAPI lifespan,
-  which needs an `aclose()` on `CardIssuerAdapter` that every adapter would inherit
-  for one adapter's benefit — worth doing when a second adapter also needs it.
+- **A retryable marker on issuer errors.** Both `lithic/client.py` and
+  `stripe_issuing/client.py` know which failures are worth retrying (429, 5xx,
+  timeouts) and retry them themselves, but that knowledge cannot cross
+  `issuers/base.py` — so the funding engine cannot yet tell "the provider is busy"
+  from "the provider refused". Phase 5 needs the distinction to decide between a retry
+  and a `FAILED` intent; adding it before there is a consumer would be guessing at the
+  shape. **Phase 4 raised the evidence rather than settling it:** two adapters now
+  carry an unused `retryable` flag on their own error types, and they agree on the
+  status set, so the shape is no longer a guess — it is waiting on phase 5's consumer.
+- **A pooled HTTP client with a shutdown hook.** Both clients open a connection per
+  request to avoid putting a resource lifetime on the issuer interface (§4.3). A
+  production path pools connections and closes them from a FastAPI lifespan, which
+  needs an `aclose()` on `CardIssuerAdapter` that every adapter would inherit for one
+  adapter's benefit. §4.3 named Stripe as the trigger for reconsidering; phase 4
+  reconsidered and **deliberately did not take it** (§8.6), because widening the
+  interface to save a connection setup would be answering a performance question by
+  spending the thing being measured. Still deferred, now with a second adapter's worth
+  of evidence that it is only a performance question.
+- **Recording Stripe fixtures from a live test-mode account**, and a
+  `scripts/demo_phase4.py` to match phases 1–3. Both need `STRIPE_ISSUING_API_KEY`,
+  which did not exist when phase 4 was built (§8.9). Until then the Stripe fixtures
+  are documentation-derived, which is weaker evidence than phase 3's recorder
+  produced.
+- **`disable_existing_loggers=False` in `alembic/env.py`.** Running migrations
+  currently switches off every logger the app created at import time, so no adapter's
+  fail-closed webhook warning is observable from a test (§8.9). One line, found in
+  phase 4, outside phase 4's permitted diff.
 - **Book-transfer funding** for a ledger-enabled Lithic program, replacing the memo
   tag with provider-side idempotency (§4.4, §4.5). Needs a program this sandbox does
   not have.
@@ -673,6 +694,12 @@ exists to test exactly this).
 
 Enforced by `tests/test_module_boundaries.py`, which parses the import graph rather
 than trusting review — and, since §7.4, the settings graph too.
+
+**Tested for real in phase 4**, which added a second `FIAT_RAIL` provider as one
+package plus one `register()` line, with zero changes in `funding/`, `ledger/`,
+`webhooks/`, `api/` or `core/` and no existing test modified. §8 records what the
+adapter had to absorb to make that true, and the two places the interface was
+reconsidered and deliberately left alone.
 
 ---
 
@@ -881,3 +908,273 @@ redeemed" versus "never existed", because those are different incidents. There i
 `reveal` method on `CardIssuerAdapter`, because there is no caller until phase 8 and
 adding one now would mean guessing at its shape while every other adapter inherits
 the guess.
+
+---
+
+## 8. Decisions recorded in phase 4
+
+Phase 4's purpose is not to add a provider. It is to **test** the abstraction with a
+second real one: SPEC.md §12.4 says that if any core module needed changing, that is
+a design bug to fix rather than a step to take. So the useful record here is what the
+adapter had to absorb, and what it did *not* have to change.
+
+**The result.** The whole phase is one new package plus one `register()` line:
+
+```
+backend/app/issuers/stripe_issuing/   __init__ adapter client config signing
+backend/app/issuers/__init__.py       +1 register() call (+ the comment explaining it)
+```
+
+Zero changes in `funding/`, `ledger/`, `webhooks/`, `api/` or `core/`; no route,
+handler, migration, `docker-compose.yml` entry, dependency or mobile screen. **No
+existing test was modified**, which is the part worth dwelling on: `GET /providers`
+started listing a third issuer, `registry.describe()` started reporting a third
+funding model, and every assertion already in the suite kept passing because they
+were written as membership rather than equality.
+
+What the phase did add outside `issuers/`, all of it required by rules that predate
+it: six new test files and their fixtures (TDD the financial core), and a
+`STRIPE_ISSUING_*` block in `.env.example` (every variable documented before it is
+read). Neither is a design smell; both would be true of any new adapter.
+
+### 8.1 What Stripe pushed on, and where it stopped
+
+Five things about Stripe do not fit the shape of the interface. All five were
+absorbed inside the package.
+
+| Stripe | Where it stopped |
+| --- | --- |
+| Form-encoded bodies with bracketed nesting, not JSON | `client.form_encode` |
+| `Authorization: Bearer`, and test-vs-live decided by the key | `client.checked_api_key` |
+| `inactive` means both "never activated" and "frozen" | a metadata marker (§8.3) |
+| Cardholders need a billing address and a 24-character name | in-adapter sandbox placeholders |
+| Card and event payloads embed the whole cardholder | `raw` allowlists (§8.5) |
+
+The one that could have gone the other way is the cardholder identity data. §5 had
+flagged `CreateCardholderRequest` as a likely pressure point, and it was: Stripe
+requires `billing[address]` and a display name Lithic does not ask for. It stayed
+inside the adapter for the same reason Lithic's `SANDBOX_PHONE_NUMBER` and
+`SANDBOX_ADDRESS` did — a sandbox program with KYC out of scope (SPEC.md §2) can
+supply obvious placeholders, and a field added to the DTO for one provider is what
+`raw` and in-adapter constants exist to avoid. **A real KYC flow would change this
+answer**, and that is a production-path item, not an abstraction leak.
+
+### 8.2 The signature scheme, and what we could not verify
+
+`Stripe-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over `"{t}.{raw body}"`, several
+`v1` values while a secret is rotating, and a `v0` on test events that is
+deliberately not valid. Three divergences from Lithic, each with a plausible wrong
+answer:
+
+- **The key is the secret exactly as issued**, `whsec_` prefix included. Lithic
+  documents base64-decoding what follows its prefix; Stripe documents "use the
+  signing secret as the key" and never mentions decoding. Same-looking secret, two
+  different keys — and the wrong choice fails only on genuine deliveries, never on a
+  test that signs with itself. `test_a_signature_keyed_the_lithic_way_is_rejected`
+  pins both directions so the divergence cannot be tidied into agreement.
+- **The digest is hex**, not base64.
+- **`v0` is never accepted.** Trusting it would make every Dashboard "send test
+  webhook" click a way to write to the ledger.
+
+**The evidence here is weaker than phase 3's, and the gap is the point of this
+entry.** Lithic publishes a worked example, so `test_lithic_signing.py` pins our
+implementation against *their* numbers. Stripe publishes no vector, so ours were
+computed independently of the implementation and are regression pins only. They
+prove we are self-consistent; they cannot prove Stripe agrees. The `whsec_` prefix
+question is the single assumption a real delivery would settle in one attempt.
+
+Same for the fixtures generally: `tests/fixtures/stripe_issuing/` is hand-authored
+from Stripe's published example objects, not recorded from a live account, which
+`README.md` in that directory states plainly. Anything Stripe sends that its
+reference omits — an extra field, a nullable that is never null, a status enum
+member the docs do not list — is invisible to this suite. The adapter is
+correspondingly strict: every "cannot read this" path is a loud `IssuerError` or an
+`UNMAPPED` event, never a fallback that looks like a number.
+
+### 8.3 `inactive` means two things, so the adapter keeps the missing bit
+
+Stripe's card statuses are `active`, `inactive`, `canceled`. `CardState`
+distinguishes a card that has never been activated from one that was and is now
+blocked — and Stripe does not, while defaulting new cards to `inactive`, so both
+readings are live at once.
+
+Neither simple mapping works. `inactive → FROZEN` reports a brand-new card as
+blocked; `inactive → UNACTIVATED` reports a frozen card as never used. Either way
+SPEC.md §9.1's freeze/unfreeze toggle shows the wrong thing.
+
+So the adapter stores the bit itself, as `stablecard_activated_at` in the card's own
+`metadata`: present means this card has been activated at least once, therefore
+`inactive` now means frozen. This is the same move as §4.5's funding tag in a Lithic
+memo — provider-side storage, so it survives our crashing — and it is legitimately
+our data, in that Stripe never had it.
+
+Note what it did *not* require: no new `CardState` member, and no provider-shaped
+field on `Card`. The alternative considered and rejected was creating cards `active`
+so that `UNACTIVATED` never arises, as Lithic's virtual cards genuinely never do
+(§4.1's third note). Rejected because Stripe's `inactive` card really does decline,
+so calling it active would be a claim about whether it can spend.
+
+**One unverified assumption, insured against rather than trusted.** Stripe documents
+`metadata` as merged key-by-key, so writing one key leaves the others alone. If it
+ever *replaced* the map, an unfreeze or a funding call would erase the funding
+idempotency record. So every write that touches metadata restates the `stablecard_*`
+keys it owns, which is correct under either behaviour and costs one read on
+`activate_card`. `freeze_card` and `cancel_card` send no metadata parameters at all,
+so there is nothing to merge or replace. Once a real key exists, a recorded fixture
+settles it and the restating can go.
+
+### 8.4 Funding is a spending-limit raise, again — and better
+
+Stripe cards spend from the *account's* Issuing balance. There is no per-card balance
+to move money into, so funding is a raise of the card's own `all_time` spending
+limit: the same answer as §4.4 reached at Lithic, arrived at for a different reason
+(Lithic's program has no ledger; Stripe's model has no per-card one). `all_time` is
+the only interval that behaves like a balance — the rest reset, and funding raised
+into a monthly limit would leak away at the start of the month, so a card limited on
+another interval is reported as having no limit and refused for funding.
+
+Two ways Stripe is materially better, both of which change what phase 5 can assume:
+
+- **`Idempotency-Key` works on every POST**, not only on creation. So a retry inside
+  Stripe's 24-hour window replays *their* record of the funding, where Lithic's
+  funding idempotency rests entirely on our own marker having been written (§4.5).
+  The metadata marker is still there as the backstop past that window. The amount is
+  part of the key's material on purpose: two calls with one ref and different amounts
+  must reach the check in `fund_card` and be refused, not be silently collapsed by
+  Stripe's idempotency layer.
+- **"Unlimited" is the absence of a limit, not a zero.** §4.4 records Lithic's
+  footgun — `spend_limit: 0` means *unlimited* there, so a card cannot start unable
+  to spend and be funded up. At Stripe a zero `all_time` limit is a real "cannot
+  spend yet" and is the natural base for a funding raise.
+
+What is *not* better, deliberately: one marker slot, so a card remembers only its
+most recent funding ref. That is exactly Lithic's limitation and is kept identical.
+The engine advances one intent at a time, so both adapters offer it the same
+guarantee — and **the abstraction is tested by the guarantees matching, not by the
+implementations matching**. A per-ref scheme was considered (Stripe metadata keys cap
+at 40 characters, so a UUID ref would need hashing) and rejected as buying a
+capability nothing needs at the price of a collision surface.
+
+`get_balance` is derived, as Lithic's is, because Stripe exposes no per-card balance
+(`GET /v1/balance` is the whole account's Issuing funds). Two endpoints rather than
+one: settled transactions sum straight in because Stripe signs them (capture
+negative, refund positive), and approved authorizations still `pending` come off as
+holds. Nothing double-counts, because an authorization leaves `pending` precisely
+when it becomes a transaction or releases its hold — and the authorization list is
+filtered `status=pending` provider-side so that reasoning is explicit rather than
+incidental.
+
+### 8.5 `raw` is an allowlist on both paths, and expansions are collapsed
+
+`raw` reaches the ledger's append-only payload column, and the project's standing
+line is that names and addresses do not go there (`cardholder.created` ledgers an
+email domain and nothing else).
+
+On the REST path this is the same allowlist discipline §4.1 describes for Lithic,
+with one extra reason: Stripe's card object *embeds the whole cardholder*, and can
+carry `number` and `cvc` when expanded. Tests assert the personal data is absent
+rather than trusting the list to be complete.
+
+On the webhook path it is a **deliberate divergence from Lithic's adapter**, which
+keeps its delivered payloads untouched on the grounds that normalizing loses nothing.
+That reasoning holds only because Lithic's payloads are flat. Stripe's expand — an
+`issuing_card.created` delivery contains the cardholder's name, phone and postal
+address — so nested API objects are collapsed back to the ids they came from. The
+rule is narrow on purpose: only a mapping carrying both `object` and `id` is
+collapsed, because only a nested Stripe object can carry somebody's name. So
+`merchant_data`, `verification_data` and `request_history` survive whole, and a
+reconciler loses nothing it needs.
+
+The envelope's `request.idempotency_key` is kept: it is our own key coming back,
+which is how a handler can tie an event to the call that caused it.
+
+### 8.6 An adapter must be constructible without its credentials
+
+`registry.describe()` builds every registered adapter in order to report its funding
+model, and `GET /providers` calls it (§3.1's factory decision is what makes the build
+lazy in the first place). So an adapter that refuses to *exist* without a key takes
+that endpoint down for the providers that do have one.
+
+`StripeIssuingAdapter.from_settings()` therefore validates nothing, and
+`checked_api_key` runs on the request path, where the failure can name
+`STRIPE_ISSUING_API_KEY`.
+
+**This is a finding about phase 3, not just a decision about phase 4.**
+`lithic/client.py` validates its key in the constructor, so `registry.describe()` —
+and `test_registry.py`'s test of it, and `GET /providers` — already depend on
+`LITHIC_API_KEY` being set. That passes locally because a key is configured; it
+would fail in CI. Left alone rather than fixed here: it is phase 3's behaviour and
+changing it is not what this phase is for.
+
+The lazy build is also why `config.py` defaults credentials to empty rather than to a
+value, and why `client.py` still opens one `httpx.AsyncClient` per request. §5 listed
+Stripe as the trigger for reconsidering a pooled client and its `aclose()` on
+`CardIssuerAdapter` (§4.3). Reconsidered, and deliberately not taken: this phase's
+job is to test the interface, and widening it to avoid a connection setup would be
+answering a performance question by spending the thing being measured. It stays
+deferred, now with a second adapter's worth of evidence that it is only a performance
+question.
+
+### 8.7 Two mapping traps in the event table
+
+Most of `parse_webhook` is a lookup. Two entries are not, and both would be silent
+if wrong:
+
+**A captured purchase must not settle twice.** Stripe sends
+`issuing_transaction.created` *and* an `issuing_authorization.updated` moving the
+authorization to `closed`, for one purchase. Only the first is a `SETTLEMENT`; the
+close is recorded as `issuing_authorization.updated:closed` under `UNMAPPED`. Mapping
+both would double-count every card payment in the ledger — and nothing would look
+wrong until a balance was reconciled.
+
+**A reversal's amount is zero by the time we see it.** Stripe zeroes `amount` when an
+authorization is voided, so the magnitude that was actually released survives only in
+`data.previous_attributes` — which is exactly what that field is for. Absent it, the
+adapter reports the zero rather than inventing a figure. `reversed` and `expired` are
+one fact spelled two ways depending on API version, and mapping both is what makes
+leaving `Stripe-Version` unpinned safe (`config.api_version` explains why pinning to
+a version string this suite cannot check would be worse).
+
+`issuing_authorization.request` is `UNMAPPED` on purpose. It is a two-second request
+for an authorization *decision*, not a record that money moved, and this pipeline
+verifies, dedups and queues (SPEC.md §4) — so it is structurally not the thing that
+answers one. Real-time authorization control is a production-path feature.
+
+Phase 3's one interface change pays off here. `parse_webhook(headers, body)` was
+widened because Lithic's event id is in a header and its `card.created` payload has
+no timestamp (§4.1). Stripe is the mirror image: id, type and timestamp all sit in an
+Event envelope in the body, and the adapter does not read the headers at all. The
+widened signature cost Stripe nothing and a body-only signature would have cost
+Lithic everything — which is the argument for having changed the interface rather
+than smuggling headers past it.
+
+### 8.8 No 3DS challenge from Stripe
+
+This adapter never produces `THREE_DS_CHALLENGE`. Stripe delivers a cardholder's
+verification code itself and publishes no issuer-facing challenge webhook, so there
+is nothing to normalize — a finding rather than a gap, and the interface accommodates
+it without comment because an adapter is free never to emit an event type.
+
+Phase 7 gets the OTP path from the mock adapter's simulator, which SPEC.md §6 already
+allows for. If Stripe adds an issuer-facing challenge, `CardEventType` already has
+the member.
+
+### 8.9 What phase 4 could not test, and one defect it found
+
+The phase ran with **no Stripe credentials**, which bounds what it establishes.
+Every call shape, signature computation and mapping is exercised against
+documentation-derived fixtures; none has been seen to work against Stripe. The
+honest summary is that phase 4 proves the *abstraction* holds and leaves the
+*integration* unproven. Three things are waiting on a key: re-recording the fixtures
+from a real test-mode account, a `scripts/demo_phase4.py` to match phases 1–3, and
+settling the `whsec_` prefix question in §8.2.
+
+A defect found on the way, in test infrastructure rather than in the adapter:
+`alembic/env.py` calls `fileConfig(config.config_file_name)` with the default
+`disable_existing_loggers=True`. The session-scoped migration fixture therefore
+switches off every logger the app created at import time, so **both adapters'
+fail-closed webhook warnings are invisible to the entire suite** — which is why
+`lithic/adapter.py`'s equivalent warning has never been observed by a test.
+`test_an_unconfigured_endpoint_fails_closed` re-enables its own logger and says why.
+The fix is `disable_existing_loggers=False`, one line in `alembic/env.py`; not taken
+here because it is outside this phase's diff.
