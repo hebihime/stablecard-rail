@@ -78,14 +78,27 @@ def test_the_adapter_declares_itself_a_fiat_rail_issuer(adapter: LithicAdapter) 
     assert FundingModel.FIAT_RAIL is adapter.funding_model
 
 
-def test_a_client_without_a_key_refuses_to_be_built() -> None:
-    with pytest.raises(ValueError, match="LITHIC_API_KEY"):
-        LithicClient(base_url=BASE_URL, api_key="", timeout=5.0)
+def test_a_client_builds_without_a_key_and_refuses_on_first_use() -> None:
+    # The two checks below are deliberately in different places, and the pair is the
+    # point (docs/ARCHITECTURE.md §8.10):
+    #
+    #   * an empty **API key** is refused on the request path, because it already fails
+    #     loudly and correctly on its own (Lithic answers 401 "Please provide a valid API
+    #     key") and because `registry.describe()` builds every adapter to answer
+    #     `GET /providers` — so refusing to be *built* took that route down for the
+    #     providers that were configured;
+    #   * an unusable **webhook secret** is refused at construction, because it fails
+    #     silently and in the wrong place: every genuine delivery comes back "invalid
+    #     signature" and sends whoever debugs it to Lithic's dashboard instead of `.env`.
+    #
+    # Building with no key must therefore succeed. `tests/test_lithic_client.py` asserts
+    # the refusal that follows on the first call.
+    assert LithicClient(base_url=BASE_URL, api_key="", timeout=5.0) is not None
 
 
 def test_a_webhook_secret_that_cannot_be_a_key_is_refused_at_construction() -> None:
     # Fail where the misconfiguration is, not later as "invalid signature" on every
-    # genuine delivery.
+    # genuine delivery. Contrast the API key, above.
     client = LithicClient(base_url=BASE_URL, api_key=API_KEY, timeout=5.0)
     with pytest.raises(ValueError, match="base64"):
         LithicAdapter(client=client, webhook_secret="whsec_not base64 at all!!")
@@ -505,14 +518,22 @@ def test_from_settings_builds_against_the_configured_sandbox(
     assert "lithic" == built.provider_id
 
 
-def test_from_settings_refuses_to_build_without_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Phases 1-2 and the mock provider must keep working on a machine with no Lithic
-    # credentials at all, so this fails at the one call that needs them and nowhere
-    # earlier.
+async def test_from_settings_builds_without_a_key_and_fails_at_the_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # What this test always said it was checking: the other providers must keep working
+    # on a machine with no Lithic credentials at all, so the failure lands "at the one
+    # call that needs them and nowhere earlier". It used to assert the opposite of its
+    # own comment — that `from_settings()` raises — which is construction, not a call,
+    # and is what `registry.describe()` invokes (§8.6, §8.10).
     configure(monkeypatch, api_key="")
 
+    adapter = LithicAdapter.from_settings()
+    assert adapter.provider_id == "lithic"
+
     with pytest.raises(ValueError, match="LITHIC_API_KEY"):
-        LithicAdapter.from_settings()
+        # Refused before any request is built, so this touches no network.
+        await adapter.get_card("card_whatever")
 
 
 def test_the_base_url_defaults_to_the_sandbox() -> None:

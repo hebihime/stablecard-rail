@@ -51,7 +51,31 @@ __all__ = [
     "RETRY_BACKOFF_SECONDS",
     "LithicApiError",
     "LithicClient",
+    "checked_api_key",
 ]
+
+
+def checked_api_key(api_key: str) -> str:
+    """The key to authenticate with, or a `ValueError` naming what is wrong.
+
+    On the request path rather than in the constructor, and that placement is the whole
+    point: `registry.describe()` builds every registered adapter to report its funding
+    model, and `GET /providers` calls it (docs/ARCHITECTURE.md §3.1). So a client that
+    refused to *exist* without a key took that endpoint down for the providers that
+    were configured, and made the suite's own `describe()` test pass only on a machine
+    with Lithic credentials.
+
+    This used to be a constructor check, by analogy with the webhook-secret check in
+    `adapter.py`. The analogy does not hold. An unusable *secret* fails silently and in
+    the wrong place — every genuine delivery comes back "invalid signature" and sends
+    whoever debugs it to Lithic's dashboard instead of to `.env` — so validating it
+    early buys a correctly attributed error. An empty *API key* fails loudly and
+    correctly on its own: the next call is a 401 saying "Please provide a valid API
+    key". The early check bought nothing and cost the route above (§8.6, §8.10).
+    """
+    if not api_key:
+        raise ValueError("lithic api key is empty; set LITHIC_API_KEY (see .env.example)")
+    return api_key
 
 
 class LithicApiError(IssuerError):
@@ -88,8 +112,7 @@ class LithicClient:
         sleep: Sleeper | None = None,
         backoff: tuple[float, ...] = RETRY_BACKOFF_SECONDS,
     ) -> None:
-        if not api_key:
-            raise ValueError("lithic api key is empty; set LITHIC_API_KEY (see .env.example)")
+        # Deliberately no key validation here: see `checked_api_key`.
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
@@ -149,7 +172,10 @@ class LithicClient:
         json_body: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        headers = {"Authorization": self._api_key, "Accept": "application/json"}
+        headers = {
+            "Authorization": checked_api_key(self._api_key),
+            "Accept": "application/json",
+        }
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
 

@@ -52,8 +52,27 @@ def sleeps() -> Sleeps:
     return Sleeps()
 
 
-def make_client(sleeps: Sleeps) -> LithicClient:
-    return LithicClient(base_url=BASE_URL, api_key=API_KEY, timeout=5.0, sleep=sleeps)
+def make_client(sleeps: Sleeps, *, api_key: str = API_KEY) -> LithicClient:
+    return LithicClient(base_url=BASE_URL, api_key=api_key, timeout=5.0, sleep=sleeps)
+
+
+@respx.mock
+async def test_building_a_client_needs_no_credentials(sleeps: Sleeps) -> None:
+    # `registry.describe()` builds every registered adapter in order to report its
+    # funding model, and `GET /providers` calls it (docs/ARCHITECTURE.md §3.1, §8.6).
+    # An adapter that refused to *exist* without a key would take that endpoint down
+    # for the providers that are configured, and would make this suite's own
+    # `test_describe_exposes_the_funding_model_taxonomy` depend on LITHIC_API_KEY —
+    # green here, red in CI.
+    route = respx.get(f"{BASE_URL}/cards/abc")
+    client = make_client(sleeps, api_key="")
+
+    with pytest.raises(ValueError, match="LITHIC_API_KEY"):
+        await client.get("/cards/abc")
+
+    # And nothing was sent: an empty key is refused before the request, not answered
+    # with a 401 we would then have to translate.
+    assert route.call_count == 0
 
 
 # ---------------------------------------------------------- authentication ----

@@ -91,21 +91,51 @@ def test_the_lithic_adapter_is_registered_by_importing_the_package() -> None:
     assert "lithic" in registry.known_providers()
 
 
-def test_a_provider_with_no_credentials_configured_still_registers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Registration is by factory, so an environment without Lithic credentials boots
-    # and serves the mock provider; only a call that needs a key fails, and it names
-    # the variable (docs/ARCHITECTURE.md §3.1).
+def unconfigured_lithic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the Lithic factory at settings with no credentials in them."""
     from app.issuers.lithic import adapter as lithic_adapter
     from app.issuers.lithic.config import LithicSettings
 
     monkeypatch.setattr(lithic_adapter, "get_lithic_settings", lambda: LithicSettings(api_key=""))
     registry.reset_instances()
 
+
+async def test_a_provider_with_no_credentials_configured_still_registers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Registration is by factory, so an environment without Lithic credentials boots
+    # and serves the other providers; **only a call that needs a key fails**, and it
+    # names the variable (docs/ARCHITECTURE.md §3.1).
+    #
+    # That sentence is what this test has always claimed. It used to assert something
+    # weaker and wrong — that *building* the adapter raises — because `LithicClient`
+    # validated the key in its constructor. Phase 4 found what that cost (§8.6, §8.10):
+    # `describe()` builds every adapter, so the failure landed on a route rather than on
+    # the call, and this suite only passed on a machine with Lithic credentials.
+    unconfigured_lithic(monkeypatch)
+
     assert "lithic" in registry.known_providers()
+    adapter = registry.get_adapter("lithic")
+
     with pytest.raises(ValueError, match="LITHIC_API_KEY"):
-        registry.get_adapter("lithic")
+        # No network: the key is refused before a request is built.
+        await adapter.get_card("card_whatever")
+
+
+def test_describing_the_providers_needs_nobodys_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The bug behind the change above, asserted directly. `GET /providers` calls
+    # `describe()`, which instantiates every registered adapter to read its funding
+    # model — so one adapter demanding a credential took the endpoint down for all of
+    # them. Green on a developer machine, red in CI, which is the worst combination.
+    unconfigured_lithic(monkeypatch)
+
+    described = dict(registry.describe())
+
+    assert described["lithic"] is FundingModel.FIAT_RAIL
+    assert described["stripe_issuing"] is FundingModel.FIAT_RAIL
+    assert described["gnosis_pay_mock"] is FundingModel.CRYPTO_DEPOSIT
 
 
 def test_registrations_survive_an_instance_reset_but_instances_do_not() -> None:
