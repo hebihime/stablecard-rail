@@ -1,13 +1,15 @@
 """Test bootstrap.
 
-The suite runs against a real PostgreSQL database (see docs/ARCHITECTURE.md,
-"Testing against real Postgres"): the ledger relies on JSONB, identity columns,
-partial-unique semantics and an append-only trigger, none of which SQLite models
-faithfully. The database is created if missing and migrated with Alembic, so
-every run also exercises the migration path.
+The suite runs against real PostgreSQL and real Redis (see docs/ARCHITECTURE.md
+§2.11): the ledger relies on JSONB, identity columns, partial-unique semantics and
+an append-only trigger, and webhook dedup is `SETNX`-with-TTL semantics — none of
+which a fake models faithfully, and all of which this system's correctness rests
+on. The database is created if missing and migrated with Alembic, so every run
+also exercises the migration path.
 
-`DATABASE_URL` is rewritten to the test database *before* application modules are
-imported, so app code, Alembic and the tests can never target different databases.
+`DATABASE_URL` and `REDIS_URL` are rewritten to test targets *before* application
+modules are imported, so app code, Alembic and the tests can never disagree about
+where they point.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import os
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 from sqlalchemy import text
@@ -31,6 +34,9 @@ from sqlalchemy.pool import NullPool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_URL = "postgresql+asyncpg://stablecard:stablecard@localhost:5442/stablecard"
+_DEFAULT_REDIS_URL = "redis://localhost:6389/0"
+#: The suite flushes this database wholesale, so it must never be the app's.
+TEST_REDIS_DB = 15
 
 
 def _resolve_test_database_url() -> str:
@@ -42,18 +48,31 @@ def _resolve_test_database_url() -> str:
     return url.set(database=f"{url.database}_test").render_as_string(hide_password=False)
 
 
-# Must happen before `app.*` is imported: app settings read DATABASE_URL at import.
+def _resolve_test_redis_url() -> str:
+    explicit = os.getenv("TEST_REDIS_URL")
+    if explicit:
+        return explicit
+    parts = urlsplit(os.getenv("REDIS_URL", _DEFAULT_REDIS_URL))
+    return urlunsplit(parts._replace(path=f"/{TEST_REDIS_DB}"))
+
+
+# Must happen before `app.*` is imported: app settings read the environment at import.
 TEST_DATABASE_URL = _resolve_test_database_url()
+TEST_REDIS_URL = _resolve_test_redis_url()
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+os.environ["REDIS_URL"] = TEST_REDIS_URL
 os.environ.setdefault("ENVIRONMENT", "test")
+
+from redis.asyncio import Redis  # noqa: E402
 
 from app.funding.models import FundingIntent  # noqa: E402
 from app.funding.states import FundingState  # noqa: E402
 from app.issuers import registry  # noqa: E402
 from app.issuers.evm_deposit_mock import EvmDepositMockAdapter  # noqa: E402
+from app.webhooks import dispatch  # noqa: E402
 from tests.support import SeedIntent  # noqa: E402
 
-TRUNCATED_TABLES = "ledger_events, funding_intents"
+TRUNCATED_TABLES = "ledger_events, funding_intents, webhook_dead_letters"
 
 
 async def _create_database_if_missing(url_str: str) -> None:
@@ -126,6 +145,21 @@ async def session(
         yield db_session
 
 
+@pytest.fixture
+async def redis_client() -> AsyncIterator[Redis]:
+    """A flushed Redis on a database of its own.
+
+    Per test, not per session: `redis.asyncio` connections are bound to the event
+    loop that opened them, exactly like asyncpg's.
+    """
+    client: Redis = Redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    await client.flushdb()
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
 @pytest.fixture(autouse=True)
 def isolated_issuer_registry() -> Iterator[None]:
     """Restore the adapter registry, and hand every test a fresh provider.
@@ -141,6 +175,14 @@ def isolated_issuer_registry() -> Iterator[None]:
         registry._FACTORIES.clear()
         registry._FACTORIES.update(snapshot)
         registry.reset_instances()
+
+
+@pytest.fixture(autouse=True)
+def isolated_subscriptions() -> Iterator[None]:
+    """Webhook handler subscriptions are process-global; do not let them leak."""
+    dispatch.clear_subscriptions()
+    yield
+    dispatch.clear_subscriptions()
 
 
 @pytest.fixture

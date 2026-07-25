@@ -32,6 +32,7 @@ from app.issuers.base import (
 )
 from app.issuers.evm_deposit_mock import EvmDepositMockAdapter
 from app.ledger.models import LedgerEvent
+from app.webhooks.models import WebhookDeadLetter
 
 
 class SeedIntent(Protocol):
@@ -54,6 +55,18 @@ async def ledger_for_intent(session: AsyncSession, intent_id: uuid.UUID) -> list
     result = await session.execute(
         select(LedgerEvent).where(LedgerEvent.intent_id == intent_id).order_by(LedgerEvent.id)
     )
+    return list(result.scalars().all())
+
+
+async def all_ledger_events(session: AsyncSession) -> list[LedgerEvent]:
+    session.expire_all()
+    result = await session.execute(select(LedgerEvent).order_by(LedgerEvent.id))
+    return list(result.scalars().all())
+
+
+async def dead_letters(session: AsyncSession) -> list[WebhookDeadLetter]:
+    session.expire_all()
+    result = await session.execute(select(WebhookDeadLetter).order_by(WebhookDeadLetter.id))
     return list(result.scalars().all())
 
 

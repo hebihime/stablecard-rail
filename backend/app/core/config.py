@@ -30,10 +30,16 @@ class Settings(BaseSettings):
 
     default_currency: str = "USD"
 
-    # --- webhook signatures (SPEC.md §4) -----------------------------------
+    # --- webhooks (SPEC.md §4) ---------------------------------------------
+    #: How long a `(provider_id, event_id)` dedup claim is remembered in Redis.
+    #: The ledger's unique index is the durable backstop once this expires.
+    webhook_dedup_ttl_seconds: int = 86_400
     #: Rejection window for signature timestamps, so a captured delivery cannot
     #: be replayed indefinitely.
     webhook_signature_tolerance_seconds: int = 300
+    #: Delay before each successive handler retry. Its length is the attempt cap:
+    #: an event that exhausts it is dead-lettered.
+    webhook_retry_backoff_seconds: tuple[int, ...] = (2, 8, 32, 128, 512)
 
     # --- issuers (SPEC.md §3) ----------------------------------------------
     #: HMAC key the in-process mock provider signs its own webhooks with. Not a

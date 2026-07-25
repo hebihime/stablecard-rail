@@ -14,7 +14,8 @@ from sqlalchemy import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 import app.funding.models
-import app.ledger.models  # noqa: F401 -- registers tables on Base.metadata
+import app.ledger.models
+import app.webhooks.models  # noqa: F401 -- registers tables on Base.metadata
 from app.core.db import Base
 
 
@@ -43,7 +44,7 @@ async def test_expected_tables_exist(engine: AsyncEngine) -> None:
         names = await connection.run_sync(
             lambda sync_conn: set(Base.metadata.tables) & set(_reflect_table_names(sync_conn))
         )
-    assert names == {"funding_intents", "ledger_events"}
+    assert names == {"funding_intents", "ledger_events", "webhook_dead_letters"}
 
 
 def _reflect_table_names(connection: Connection) -> list[str]:

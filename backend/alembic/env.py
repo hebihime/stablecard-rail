@@ -15,7 +15,8 @@ from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 import app.funding.models
-import app.ledger.models  # noqa: F401 -- registers tables on Base.metadata
+import app.ledger.models
+import app.webhooks.models  # noqa: F401 -- registers tables on Base.metadata
 from alembic import context
 from app.core.config import get_settings
 from app.core.db import Base
