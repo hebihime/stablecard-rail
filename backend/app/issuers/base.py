@@ -315,8 +315,14 @@ class CardIssuerAdapter(ABC):
         """
 
     @abstractmethod
-    async def parse_webhook(self, body: bytes) -> CardEvent:
+    async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
         """Normalize a verified delivery.
+
+        Takes the headers as well as the body — SPEC.md §3.1 sketches this as
+        body-only, but a real provider's envelope is split across both: Lithic
+        sends the event id in `webhook-id` and its `card.created` payload has no
+        timestamp anywhere, so body-only normalization cannot fill in `CardEvent`
+        (docs/ARCHITECTURE.md §4.1).
 
         Unknown provider event types map to `CardEventType.UNMAPPED`. Raise
         `WebhookParseError` only when the body itself is unreadable.

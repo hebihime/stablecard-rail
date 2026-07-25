@@ -159,6 +159,27 @@ async def test_the_event_is_published_on_the_bus(
     assert published[0].stream_id == outcome.stream_id
 
 
+async def test_the_delivery_headers_reach_the_adapter_that_normalizes_it(
+    session: AsyncSession, redis_client: Redis, stub_provider: StubIssuerAdapter
+) -> None:
+    # Some providers put the event id and the only usable timestamp in headers
+    # (Lithic does both), so the receiver hands the whole envelope to the adapter
+    # instead of the body alone. docs/ARCHITECTURE.md §4.1.
+    headers = {StubIssuerAdapter.EVENT_ID_HEADER: "evt-from-a-header"}
+
+    await receive(
+        session,
+        redis_client,
+        provider_id=stub_provider.provider_id,
+        headers=headers,
+        body=b'{"kind": "authorization"}',
+    )
+
+    assert headers == stub_provider.parsed_headers
+    published = await RedisStreamsEventBus(redis_client).read()
+    assert ["evt-from-a-header"] == [entry.event.event_id for entry in published]
+
+
 # ------------------------------------------------------------ verification ----
 
 

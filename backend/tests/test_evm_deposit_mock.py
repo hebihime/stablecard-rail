@@ -211,7 +211,8 @@ async def test_funding_emits_a_provider_confirmation_carrying_the_funding_ref(
     card_id = await make_card(adapter)
     await adapter.fund_card(card_id, Money(2500, "USD"), "intent-abc")
 
-    event = await adapter.parse_webhook(adapter.simulator.deliveries[-1].body)
+    delivery = adapter.simulator.deliveries[-1]
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert event.event_type is CardEventType.SETTLEMENT
     assert event.funding_ref == "intent-abc"
     assert event.amount == Money(2500, "USD")
@@ -360,7 +361,7 @@ async def test_every_normalized_event_type_is_produced_and_parsed(
     # downstream consumers can be written against all of it before a real
     # provider exists.
     for expected, delivery in (await _emit_each_kind(adapter)).items():
-        event = await adapter.parse_webhook(delivery.body)
+        event = await adapter.parse_webhook(delivery.headers, delivery.body)
         assert event.event_type is expected, delivery.event_type
         assert event.provider_id == "evm_deposit_mock"
         assert event.event_id == delivery.event_id
@@ -377,7 +378,7 @@ async def test_the_provider_vocabulary_is_translated_not_passed_through(
     await adapter.freeze_card(card_id)
     delivery = adapter.simulator.emit_card_lifecycle(card_id)
 
-    event = await adapter.parse_webhook(delivery.body)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert delivery.event_type == "card.state_changed"
     assert event.event_type is CardEventType.CARD_LIFECYCLE
     assert event.provider_event_type == "card.state_changed"
@@ -389,7 +390,7 @@ async def test_amounts_survive_parsing_as_integer_minor_units(
 ) -> None:
     card_id = await make_card(adapter)
     delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
-    event = await adapter.parse_webhook(delivery.body)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert event.amount == Money(1299, "USD")
     assert isinstance(event.amount.amount_minor, int)
 
@@ -401,7 +402,7 @@ async def test_an_unknown_provider_event_normalizes_to_unmapped(
     delivery = adapter.simulator.emit_unknown(
         "card.quantum_entangled", {"card_id": "card_000001", "surprise": True}
     )
-    event = await adapter.parse_webhook(delivery.body)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
 
     assert event.event_type is CardEventType.UNMAPPED
     assert event.provider_event_type == "card.quantum_entangled"
@@ -442,7 +443,7 @@ async def test_an_unreadable_body_raises_a_parse_error(
     # The receiver turns this into an `unmapped` ledger entry rather than a retry
     # loop: the delivery is authentic, so re-sending it will not help.
     with pytest.raises(WebhookParseError):
-        await adapter.parse_webhook(body)
+        await adapter.parse_webhook({}, body)
 
 
 @pytest.mark.parametrize(
@@ -463,7 +464,7 @@ async def test_an_amount_that_is_not_integer_minor_units_is_refused(
     # bytes attached, which is a bug report rather than a silent rounding.
     delivery = adapter.simulator.emit_unknown("card.note", data)
     with pytest.raises(WebhookParseError):
-        await adapter.parse_webhook(delivery.body)
+        await adapter.parse_webhook(delivery.headers, delivery.body)
 
 
 async def test_a_card_state_we_do_not_model_parses_to_no_state(
@@ -474,7 +475,7 @@ async def test_a_card_state_we_do_not_model_parses_to_no_state(
     delivery = adapter.simulator.emit_unknown(
         "card.state_changed", {"card_id": "card_000001", "state": "pending_review"}
     )
-    event = await adapter.parse_webhook(delivery.body)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert event.event_type is CardEventType.CARD_LIFECYCLE
     assert event.card_state is None
     assert event.raw["data"]["state"] == "pending_review"
@@ -484,7 +485,7 @@ async def test_a_missing_amount_parses_to_no_amount_rather_than_zero(
     adapter: EvmDepositMockAdapter,
 ) -> None:
     delivery = adapter.simulator.emit_unknown("card.note", {"card_id": "card_000001"})
-    event = await adapter.parse_webhook(delivery.body)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert event.amount is None, "absent is not the same as zero"
 
 

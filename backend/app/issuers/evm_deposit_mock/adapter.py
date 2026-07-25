@@ -161,7 +161,9 @@ class EvmDepositMockAdapter(CardIssuerAdapter):
         # cannot be rewritten by whoever replays the delivery.
         return header_value(headers, EVENT_ID_HEADER)
 
-    async def parse_webhook(self, body: bytes) -> CardEvent:
+    async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
+        # This provider repeats the envelope inside the body, so it needs nothing
+        # from `headers` — unlike Lithic, which is why the interface offers them.
         envelope = _read_envelope(body)
         data = envelope.data
 

@@ -105,9 +105,11 @@ async def receive(
     gate = DedupGate(redis)
 
     if not await gate.claim(provider_id, event_id):
-        return await _already_seen(session, adapter, provider_id, event_id, body, idempotency_key)
+        return await _already_seen(
+            session, adapter, provider_id, event_id, headers, body, idempotency_key
+        )
 
-    event, parse_error = await _normalize(adapter, provider_id, event_id, body, now)
+    event, parse_error = await _normalize(adapter, provider_id, event_id, headers, body, now)
 
     try:
         entry = await record(
@@ -137,7 +139,9 @@ async def receive(
             raise
         # Redis had forgotten the claim but the ledger had not: the durable layer
         # catching what the cache missed (SPEC.md §4).
-        return await _already_seen(session, adapter, provider_id, event_id, body, idempotency_key)
+        return await _already_seen(
+            session, adapter, provider_id, event_id, headers, body, idempotency_key
+        )
     except Exception:
         # Claimed, but the work did not land. Give the claim back so the provider's
         # redelivery is treated as new rather than as a duplicate.
@@ -185,17 +189,21 @@ async def _normalize(
     adapter: CardIssuerAdapter,
     provider_id: str,
     event_id: str,
+    headers: Mapping[str, str],
     body: bytes,
     now: datetime,
 ) -> tuple[CardEvent, str | None]:
     """Parse a verified delivery, or fabricate an `unmapped` event for it.
+
+    The adapter gets the headers too: for some providers the id and the timestamp
+    are only in the envelope, not the payload (docs/ARCHITECTURE.md §4.1).
 
     A body that will not parse is still authentic, so it is recorded rather than
     rejected — with the bytes base64-encoded, because they may not be text at all
     and the ledger's payload column is JSON.
     """
     try:
-        return await adapter.parse_webhook(body), None
+        return await adapter.parse_webhook(headers, body), None
     except WebhookParseError as exc:
         logger.warning(
             "unreadable webhook body provider=%s event=%s: %s", provider_id, event_id, exc
@@ -215,6 +223,7 @@ async def _already_seen(
     adapter: CardIssuerAdapter,
     provider_id: str,
     event_id: str,
+    headers: Mapping[str, str],
     body: bytes,
     idempotency_key: str,
 ) -> DeliveryOutcome:
@@ -225,7 +234,7 @@ async def _already_seen(
     duplicate of.
     """
     original = await find_by_idempotency_key(session, idempotency_key)
-    event, _ = await _normalize(adapter, provider_id, event_id, body, datetime.now(UTC))
+    event, _ = await _normalize(adapter, provider_id, event_id, headers, body, datetime.now(UTC))
     logger.info("ignoring duplicate webhook provider=%s event=%s", provider_id, event_id)
     return DeliveryOutcome(
         provider_id=provider_id,

@@ -417,7 +417,40 @@ anywhere: reveal is a separate short-lived single-use path in phase 8.
 
 ---
 
-## 4. Deferred decisions
+## 4. Decisions recorded in phase 3
+
+### 4.1 `parse_webhook` takes the headers as well as the body
+
+SPEC.md §3.1 sketches `parse_webhook(self, body: bytes)`. Lithic does not fit that
+signature, and the mismatch is not cosmetic:
+
+- the event id is in the **`webhook-id` header**, not the body. Lithic's delivered
+  body is the event *payload* only — no envelope, no id, no delivery timestamp. The
+  documented worked example makes this explicit: the signed body in their own
+  verification example is `{"acquirer_fee":0,"amount":2000,"authorization_amount":2000}`;
+- `card.created` payloads are `{card_token, event_type, replacement_for}` — there is
+  **no timestamp anywhere in the body**, so `CardEvent.occurred_at` has to come from
+  the `webhook-timestamp` header.
+
+Both are required fields on `CardEvent`, so a body-only `parse_webhook` cannot
+produce one. The three ways out were: smuggle the headers in through adapter state,
+have the receiver pass a pre-resolved id, or widen the interface. The first is
+invisible coupling; the second still leaves no timestamp. So the interface widened
+to `parse_webhook(headers, body)`, matching `verify_webhook(headers, body)`, and the
+asymmetry between the two webhook methods is gone.
+
+Per the working agreement this is the outcome the rule wants: an adapter that does
+not fit means the abstraction is wrong, not that the adapter should be bent. It cost
+one signature, one call site in `webhooks/receiver.py`, and no change to `funding/`,
+`ledger/` or `api/`. Phase 4's Stripe adapter reads its id from the body and will
+simply ignore the argument, exactly as `evm_deposit_mock` now does.
+
+Asserted structurally by `tests/test_issuer_interface.py`, so it cannot silently
+narrow again.
+
+---
+
+## 5. Deferred decisions
 
 Recorded here when their phase lands, per SPEC.md §11:
 
@@ -436,7 +469,7 @@ Kafka itself, real KYC, physical cards.
 
 ---
 
-## 5. Module dependency rule
+## 6. Module dependency rule
 
 Every module outside `app/issuers/` may import only `issuers/base.py` and
 `issuers/registry.py`; no adapter may import `funding/`, `ledger/`, `webhooks/` or

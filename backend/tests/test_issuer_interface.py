@@ -66,6 +66,17 @@ def test_the_interface_has_no_undocumented_methods() -> None:
     assert public == set(SPEC_METHODS) | set(ADDED_METHODS)
 
 
+@pytest.mark.parametrize("name", ("verify_webhook", "parse_webhook"))
+def test_both_webhook_methods_see_the_delivery_headers(name: str) -> None:
+    # Phase 3 finding, from Lithic: the event id arrives in a `webhook-id` header
+    # and some payloads (`card.created`) carry no timestamp at all, so a body-only
+    # `parse_webhook` cannot fill in `CardEvent`. Widening it here rather than
+    # smuggling headers past the interface is the whole point of the rule
+    # (docs/ARCHITECTURE.md §4.1). This deviates from SPEC.md §3.1's sketch.
+    params = list(inspect.signature(getattr(CardIssuerAdapter, name)).parameters)
+    assert ["self", "headers", "body"] == params
+
+
 def test_webhook_event_id_is_optional_for_adapters() -> None:
     # Adapters whose provider puts no id in the envelope inherit the default and
     # the receiver falls back to a body digest; implementing it is not a burden

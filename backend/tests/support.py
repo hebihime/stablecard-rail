@@ -104,9 +104,15 @@ class StubIssuerAdapter(CardIssuerAdapter):
     provider_id = "stub_provider"
     funding_model = FundingModel.FIAT_RAIL
 
+    #: Deliveries whose id lives in a header, the way Lithic's does.
+    EVENT_ID_HEADER = "x-stub-event-id"
+
     def __init__(self, *, verifies: bool = True, parse_fails: bool = False) -> None:
         self.verifies = verifies
         self.parse_fails = parse_fails
+        #: What `parse_webhook` was last given, so a test can assert the receiver
+        #: passes the headers through rather than dropping them.
+        self.parsed_headers: dict[str, str] | None = None
 
     async def create_cardholder(self, req: CreateCardholderRequest) -> Cardholder:
         raise NotImplementedError
@@ -135,12 +141,13 @@ class StubIssuerAdapter(CardIssuerAdapter):
     async def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
         return self.verifies
 
-    async def parse_webhook(self, body: bytes) -> CardEvent:
+    async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
+        self.parsed_headers = dict(headers)
         if self.parse_fails:
             raise WebhookParseError("stub adapter cannot read this body")
         return CardEvent(
             provider_id=self.provider_id,
-            event_id="stub-event",
+            event_id=headers.get(self.EVENT_ID_HEADER, "stub-event"),
             event_type=CardEventType.AUTHORIZATION,
             occurred_at=datetime.now(UTC),
             card_id="stub-card",
