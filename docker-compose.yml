@@ -1,0 +1,58 @@
+name: stablecard-rail
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stablecard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stablecard}
+      POSTGRES_DB: ${POSTGRES_DB:-stablecard}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5442}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stablecard} -d ${POSTGRES_DB:-stablecard}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_HOST_PORT:-6389}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-local}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEFAULT_CURRENCY: ${DEFAULT_CURRENCY:-USD}
+      DATABASE_URL: >-
+        postgresql+asyncpg://${POSTGRES_USER:-stablecard}:${POSTGRES_PASSWORD:-stablecard}@postgres:5432/${POSTGRES_DB:-stablecard}
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Migrations run at container start so `docker compose up` is the only step
+    # needed to get a schema-current backend.
+    command: >-
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  pgdata:
+  redisdata:

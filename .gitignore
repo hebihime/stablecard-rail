@@ -1,0 +1,35 @@
+# --- secrets: never tracked ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keypair.json
+id_*.json
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# --- node / react native (phase 8) ---
+node_modules/
+.expo/
+*.log
+
+# --- editors / os ---
+.DS_Store
+.idea/
+.vscode/
