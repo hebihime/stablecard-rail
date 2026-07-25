@@ -91,6 +91,44 @@ def test_no_adapter_imports_the_pipeline(path: Path) -> None:
     )
 
 
+def adapter_packages() -> list[str]:
+    """One entry per adapter: the package (or module) directly under `issuers/`."""
+    reserved = {"app.issuers", "app.issuers.base", "app.issuers.registry"}
+    return sorted(
+        {
+            ".".join(name.split(".")[:3])
+            for name in issuer_modules()
+            if name not in reserved and name.startswith("app.issuers.")
+        }
+    )
+
+
+def test_there_are_at_least_two_adapters_to_compare() -> None:
+    # From phase 3 on, the rule below has something to say. Before it, it passed
+    # for want of a second adapter rather than for want of a bad import.
+    assert len(adapter_packages()) >= 2, adapter_packages()
+
+
+@pytest.mark.parametrize("path", python_files(ISSUERS_ROOT), ids=lambda p: str(p.name))
+def test_no_adapter_imports_another_adapter(path: Path) -> None:
+    # `issuers/__init__.py` is the registry entry and names every adapter; that is
+    # its job. Every other file may not, because a helper shared between two
+    # adapters is how "adding an issuer is one adapter file" turns into "one file,
+    # plus edits to whatever they share" — and the third adapter inherits both.
+    own = ".".join(module_name(path).split(".")[:3])
+    if module_name(path) == "app.issuers":
+        pytest.skip("the registry entry is allowed to know the adapters")
+    leaked = {
+        name
+        for name in imported_modules(path) & issuer_modules()
+        if name.startswith("app.issuers.") and not name.startswith(own)
+    } - PUBLIC_ISSUER_MODULES
+    assert not leaked, (
+        f"{path.relative_to(APP_ROOT.parent)} imports {sorted(leaked)} from another "
+        f"adapter. Adapters share `base.py` and `app/core/`, and nothing else."
+    )
+
+
 def test_the_funding_machine_depends_only_on_core_and_itself() -> None:
     # Phase 1's invariant, still true: the state machine has no idea providers
     # exist. Phase 5 will make it call adapters through the registry — and nothing

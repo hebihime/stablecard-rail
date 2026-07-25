@@ -448,6 +448,28 @@ simply ignore the argument, exactly as `evm_deposit_mock` now does.
 Asserted structurally by `tests/test_issuer_interface.py`, so it cannot silently
 narrow again.
 
+### 4.2 Adapters share `base.py` and `core/`, and nothing else
+
+`lithic/signing.py` and `evm_deposit_mock/signing.py` both contain a six-line
+case-insensitive header lookup. That duplication is deliberate.
+
+The rule being protected is "adding an issuer is one adapter file plus one registry
+entry". A helper extracted because two adapters wanted it becomes a module the third
+adapter has to be written against, and then a module that cannot change without
+touching every adapter — which is the same coupling the abstraction exists to
+prevent, moved one level down. Six duplicated lines cost less than that, and the two
+schemes are genuinely different: Lithic's signature is base64 with a `v1,` prefix
+and rotation support, the mock's is hex with a `v1=` prefix.
+
+`tests/test_module_boundaries.py` now enforces this in both directions: no module
+outside `issuers/` imports an adapter, no adapter imports the pipeline, and no
+adapter imports another adapter. `issuers/__init__.py` is exempt from the last one —
+naming every adapter is precisely its job.
+
+What adapters *may* share is `app/core/` (`Money`, settings) and `issuers/base.py`.
+Both are stable by construction: `base.py` is the contract, and a change to it is
+already a breaking change that `tests/test_issuer_interface.py` will report.
+
 ---
 
 ## 5. Deferred decisions
