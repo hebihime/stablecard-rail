@@ -25,6 +25,8 @@ ledger's payload column — so the fields that go in are named one by one.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 import uuid
 from collections.abc import Callable, Mapping
@@ -36,6 +38,7 @@ from app.core.money import Money
 from app.issuers.base import (
     Card,
     CardEvent,
+    CardEventType,
     Cardholder,
     CardIssuerAdapter,
     CardNotFoundError,
@@ -48,9 +51,19 @@ from app.issuers.base import (
     FundingStatus,
     IllegalCardTransitionError,
     IssuerError,
+    WebhookParseError,
 )
 from app.issuers.lithic.client import LithicApiError, LithicClient
-from app.issuers.lithic.signing import signing_key
+from app.issuers.lithic.signing import (
+    DEFAULT_TOLERANCE_SECONDS,
+    TIMESTAMP_HEADER,
+    WEBHOOK_ID_HEADER,
+    header_value,
+    signing_key,
+    verify,
+)
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_ID = "lithic"
 
@@ -63,6 +76,35 @@ CARD_STATES: Mapping[str, CardState] = {
     "PENDING_ACTIVATION": CardState.UNACTIVATED,
     "PENDING_FULFILLMENT": CardState.UNACTIVATED,
 }
+
+#: Provider transaction-event type -> ours (SPEC.md §3.3). Every kind of
+#: authorization normalizes to `AUTHORIZATION`; the advice and financial variants are
+#: network mechanics, not different things to a ledger. `BALANCE_INQUIRY` and
+#: `RETURN_REVERSAL` are deliberately absent: neither has a normalized equivalent, so
+#: they arrive as `UNMAPPED` under their own label rather than as a near-miss.
+TRANSACTION_EVENTS: Mapping[str, CardEventType] = {
+    "AUTHORIZATION": CardEventType.AUTHORIZATION,
+    "FINANCIAL_AUTHORIZATION": CardEventType.AUTHORIZATION,
+    "AUTHORIZATION_ADVICE": CardEventType.AUTHORIZATION,
+    "CREDIT_AUTHORIZATION": CardEventType.AUTHORIZATION,
+    "FINANCIAL_CREDIT_AUTHORIZATION": CardEventType.AUTHORIZATION,
+    "CREDIT_AUTHORIZATION_ADVICE": CardEventType.AUTHORIZATION,
+    "AUTHORIZATION_REVERSAL": CardEventType.AUTHORIZATION_REVERSAL,
+    "CLEARING": CardEventType.SETTLEMENT,
+    "RETURN": CardEventType.REFUND,
+}
+
+#: Provider events about a card itself. Only `card.updated` carries a state.
+CARD_LIFECYCLE_EVENTS = frozenset(
+    {
+        "card.created",
+        "card.updated",
+        "card.converted",
+        "card.reissued",
+        "card.renewed",
+        "card.shipped",
+    }
+)
 
 #: Ours -> theirs, for the three lifecycle calls. `CLOSED` is irreversible at Lithic.
 TARGET_STATES: Mapping[CardState, str] = {
@@ -97,7 +139,7 @@ _FUNDING_TAG_PATTERN = re.compile(rf"\s*\[{_FUNDING_TAG}:(?P<ref>[^\]:]+):(?P<am
 #: Conservative cap for a card memo; Lithic documents no maximum.
 _MEMO_MAX_LENGTH = 128
 
-__all__ = ["CARD_STATES", "PROVIDER_ID", "LithicAdapter"]
+__all__ = ["CARD_STATES", "PROVIDER_ID", "TRANSACTION_EVENTS", "LithicAdapter"]
 
 
 class LithicAdapter(CardIssuerAdapter):
@@ -109,10 +151,12 @@ class LithicAdapter(CardIssuerAdapter):
         *,
         client: LithicClient,
         webhook_secret: str = "",
+        signature_tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._client = client
         self._secret = webhook_secret
+        self._tolerance_seconds = signature_tolerance_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
         # Validate the secret here rather than per delivery: a key derived from
         # garbage fails as "invalid signature" on every genuine webhook and sends
@@ -131,6 +175,7 @@ class LithicAdapter(CardIssuerAdapter):
                 timeout=settings.lithic_request_timeout_seconds,
             ),
             webhook_secret=settings.lithic_webhook_secret,
+            signature_tolerance_seconds=settings.webhook_signature_tolerance_seconds,
         )
 
     # --------------------------------------------------------- cardholders ----
@@ -381,13 +426,212 @@ class LithicAdapter(CardIssuerAdapter):
             str(card.get("cardholder_currency") or "USD"),
         )
 
-    # ------------------------------------------------ webhooks (phase 3e) ----
+    # ------------------------------------------------------------ webhooks ----
 
     async def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
-        raise NotImplementedError
+        if not self._secret:
+            # Fail closed. A program with no event subscription yet has no secret, and
+            # accepting unverifiable deliveries would let anyone write to the ledger.
+            logger.warning("lithic webhook rejected: LITHIC_WEBHOOK_SECRET is not set")
+            return False
+        return verify(
+            self._secret,
+            headers=headers,
+            body=body,
+            now=self._clock(),
+            tolerance_seconds=self._tolerance_seconds,
+        )
+
+    def webhook_event_id(self, headers: Mapping[str, str], body: bytes) -> str | None:
+        # Inside the signed content, so a replay cannot be relabelled as a new event.
+        return header_value(headers, WEBHOOK_ID_HEADER)
 
     async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
-        raise NotImplementedError
+        """Normalize one delivery.
+
+        The body is the event *payload* — Lithic sends no envelope — so the id and,
+        for payloads with no timestamp of their own, the time come from the headers
+        (docs/ARCHITECTURE.md §4.1).
+        """
+        event_id = self.webhook_event_id(headers, body)
+        if not event_id:
+            raise WebhookParseError(
+                f"delivery has no {WEBHOOK_ID_HEADER} header, so it has no id to dedup on"
+            )
+        payload = _read_payload(body)
+        provider_type = payload.get("event_type")
+        if not isinstance(provider_type, str) or not provider_type:
+            raise WebhookParseError("delivery payload has no string `event_type`")
+
+        occurred_at = _utc(
+            payload.get("updated") or payload.get("created"),
+            fallback=_header_time(headers, fallback=self._clock()),
+        )
+        common: dict[str, Any] = {
+            "provider_id": self.provider_id,
+            "event_id": event_id,
+            "provider_event_type": provider_type,
+            "occurred_at": occurred_at,
+            "card_id": _optional_str(payload.get("card_token")),
+            "cardholder_id": _optional_str(payload.get("account_token")),
+            # Untouched: normalizing loses nothing (SPEC.md §7 stores it).
+            "raw": payload,
+        }
+
+        if provider_type == "card_transaction.updated":
+            return _transaction_event(common, payload)
+        if provider_type in CARD_LIFECYCLE_EVENTS:
+            return CardEvent(
+                **common,
+                event_type=CardEventType.CARD_LIFECYCLE,
+                # Only `card.updated` carries one, and an unrecognized value stays
+                # unset rather than being guessed at.
+                card_state=CARD_STATES.get(str(payload.get("state"))),
+            )
+        if provider_type == "three_ds_authentication.challenge":
+            return _three_ds_event(common, payload)
+        if provider_type == "dispute.updated":
+            return CardEvent(
+                **common,
+                event_type=CardEventType.CHARGEBACK,
+                amount=_dispute_amount(payload),
+            )
+        # Never dropped: recorded under the provider's own label (SPEC.md §3.3).
+        return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+
+
+# --------------------------------------------------------------- webhooks ----
+
+
+def _read_payload(body: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise WebhookParseError(f"delivery body is not JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise WebhookParseError(
+            f"delivery body must be a JSON object, got {type(payload).__name__}"
+        )
+    return payload
+
+
+def _header_time(headers: Mapping[str, str], *, fallback: datetime) -> datetime:
+    """The delivery time from `webhook-timestamp`, for payloads that carry none.
+
+    Note what this is: when Lithic *sent* the attempt, not when the event happened.
+    It is only reached for payloads with no timestamp at all (`card.created`), and it
+    is a better answer than our own clock because it predates our queueing.
+    """
+    raw = header_value(headers, TIMESTAMP_HEADER)
+    if raw is None:
+        return fallback
+    try:
+        return datetime.fromtimestamp(int(raw), tz=UTC)
+    except ValueError:
+        return fallback
+
+
+def _transaction_event(common: dict[str, Any], payload: Mapping[str, Any]) -> CardEvent:
+    """A `card_transaction.updated`, keyed on the newest entry in `events`.
+
+    Lithic re-sends the whole transaction every time it changes, so the same event
+    type carries an authorization, then its clearing, then a reversal. The transaction
+    `status` cannot stand in for that: a voided authorization reports `VOIDED` and
+    would lose the reversal that caused it.
+    """
+    events = payload.get("events")
+    latest = _newest(events) if isinstance(events, list) else None
+    if latest is None:
+        # Nothing to key on. Recorded as-is rather than guessed at from `status`.
+        return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+
+    kind = str(latest.get("type"))
+    return CardEvent(
+        **{
+            **common,
+            "provider_event_type": f"{common['provider_event_type']}:{kind}",
+            "occurred_at": _utc(latest.get("created"), fallback=common["occurred_at"]),
+        },
+        event_type=TRANSACTION_EVENTS.get(kind, CardEventType.UNMAPPED),
+        amount=_event_amount(latest),
+    )
+
+
+def _newest(events: list[Any]) -> Mapping[str, Any] | None:
+    """The most recent entry, by its own timestamp, falling back to array order.
+
+    Recorded arrays are chronological, but nothing documents that they must be.
+    """
+    entries = [entry for entry in events if isinstance(entry, Mapping)]
+    if not entries:
+        return None
+    return max(
+        entries,
+        key=lambda entry: (
+            _utc(entry.get("created"), fallback=datetime.min.replace(tzinfo=UTC)),
+            entries.index(entry),
+        ),
+    )
+
+
+def _event_amount(event: Mapping[str, Any]) -> Money | None:
+    """The magnitude of one transaction event, in integer minor units.
+
+    Lithic signs these (a reversal is `-500`, a refund `-250`) and `CardEventType`
+    already says which direction the money went, so a sign here would only invite
+    double negation downstream. `effective_polarity` stays in `raw`.
+    """
+    amount = event.get("amount")
+    if amount is None:
+        return None
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise WebhookParseError(
+            f"transaction event amount must be integer minor units, "
+            f"got {type(amount).__name__} ({amount!r})"
+        )
+    return Money(abs(amount), _event_currency(event))
+
+
+def _event_currency(event: Mapping[str, Any]) -> str:
+    amounts = event.get("amounts")
+    if isinstance(amounts, Mapping):
+        for part in ("cardholder", "settlement", "merchant"):
+            entry = amounts.get(part)
+            if isinstance(entry, Mapping) and isinstance(entry.get("currency"), str):
+                return str(entry["currency"])
+    return "USD"
+
+
+def _three_ds_event(common: dict[str, Any], payload: Mapping[str, Any]) -> CardEvent:
+    """A 3DS challenge, for the OTP service in phase 7 (SPEC.md §6).
+
+    The amount is deliberately not normalized: Lithic states it as a decimal number
+    plus a `currency_exponent`, money here is integer minor units only, and there is
+    no recorded delivery to check a conversion against. `raw` keeps their numbers.
+    """
+    authentication = payload.get("authentication_object")
+    if not isinstance(authentication, Mapping):
+        return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+    return CardEvent(
+        **{
+            **common,
+            "card_id": _optional_str(authentication.get("card_token")) or common["card_id"],
+            "occurred_at": _utc(authentication.get("created"), fallback=common["occurred_at"]),
+        },
+        event_type=CardEventType.THREE_DS_CHALLENGE,
+        challenge_id=_optional_str(authentication.get("token")),
+    )
+
+
+def _dispute_amount(payload: Mapping[str, Any]) -> Money | None:
+    amount = payload.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        return None
+    return Money(abs(amount), "USD")
+
+
+def _optional_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 # ---------------------------------------------------------------- funding ----

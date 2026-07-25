@@ -551,6 +551,55 @@ key before an adapter is called at all. It is stated here rather than hidden bec
 it is a real limit of the scheme, and on a ledger-enabled program the book-transfer
 path replaces it with provider-side idempotency and no tag at all.
 
+### 4.6 A Lithic transaction event is keyed on its newest entry, not its status
+
+Lithic sends one event type — `card_transaction.updated` — for the whole life of a
+card transaction, re-delivering the entire transaction object each time it changes.
+The same event type is therefore an authorization, then its clearing, then possibly a
+reversal.
+
+The `status` field is the tempting thing to key on and the wrong one. A voided
+authorization arrives with `status: VOIDED`, which says what the transaction *is*, not
+what happened — the reversal that caused this delivery would be lost, and `VOIDED` has
+no normalized equivalent anyway. So the mapping keys on the newest entry in `events[]`
+(by its own `created`, falling back to array order), and `provider_event_type` becomes
+a compound label: `card_transaction.updated:CLEARING`.
+
+Consequences worth stating:
+
+- every flavour of authorization (`AUTHORIZATION`, `FINANCIAL_AUTHORIZATION`,
+  `AUTHORIZATION_ADVICE`, and the three credit variants) maps to `authorization`;
+  those distinctions are network mechanics, not different things to a ledger;
+- `BALANCE_INQUIRY` and `RETURN_REVERSAL` are deliberately *not* mapped. Neither has a
+  normalized equivalent, and a near-miss is worse than `unmapped` — which keeps the
+  full label and the raw payload (SPEC.md §3.3);
+- a **declined** authorization is still an `authorization`. There is no normalized
+  field for the result, and adding one for a provider detail is what `raw` is for.
+
+### 4.7 `CardEvent.amount` is a magnitude; the type carries the direction
+
+Lithic signs its event amounts: a reversal is `-500`, a refund `-250`, a purchase
+`+1234`. `CardEventType` already distinguishes `refund` from `settlement` and
+`authorization_reversal` from `authorization`, so a sign in the amount would be the
+same information twice — and the second copy is where double-negation bugs live. The
+mapping stores `abs()` and leaves `effective_polarity` in `raw`.
+
+This also keeps the two adapters agreeing: `evm_deposit_mock` emits positive amounts
+for refunds, and if Lithic reported `-250` for the same event, no consumer could sum a
+ledger without knowing which provider wrote each row.
+
+Two related decisions in the same place:
+
+- **A dispute has no card.** `dispute.updated` identifies a `transaction_token`, not a
+  card. Resolving it would take an API call, and `parse_webhook` is pure — the
+  receiver calls it a second time for duplicate deliveries. So a chargeback has
+  `card_id = None`, with the transaction token in `raw`.
+- **A 3DS challenge amount is not normalized at all.** Lithic states it as a decimal
+  number plus a `currency_exponent`. Money here is integer minor units only, the
+  conversion is exact but only via `Decimal`, and there is no recorded delivery to
+  check it against — so `amount` is `None` and the provider's own numbers stay in
+  `raw` for phase 7 to convert where it displays them.
+
 ---
 
 ## 5. Deferred decisions

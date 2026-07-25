@@ -1,0 +1,21 @@
+{
+  "amount": 1234,
+  "arbitration_date": null,
+  "created": "2026-07-25T13:00:00Z",
+  "customer_filed_date": "2026-07-24T09:15:00Z",
+  "customer_note": "Charged twice for one coffee",
+  "event_type": "dispute.updated",
+  "network_claim_ids": [],
+  "network_filed_date": null,
+  "network_reason_code": null,
+  "prearbitration_date": null,
+  "primary_claim_id": null,
+  "reason": "DUPLICATED",
+  "representment_date": null,
+  "resolution_date": null,
+  "resolution_note": null,
+  "resolution_reason": null,
+  "status": "NEW",
+  "token": "3c9e5b71-8a24-4f0d-93f6-1b7c2d4e5a68",
+  "transaction_token": "abc82de0-6f19-4c85-9d3a-7e2b1f4c8d90"
+}

@@ -1,0 +1,45 @@
+{
+  "authentication_object": {
+    "account_type": "CREDIT",
+    "authentication_request_type": "PAYMENT_TRANSACTION",
+    "authentication_result": "PENDING_CHALLENGE",
+    "card_expiry_check": "MATCH",
+    "card_token": "bc2d875e-a9f4-4222-8565-a35d9701cb0e",
+    "cardholder": {
+      "email": "ada@example.test",
+      "phone_number_mobile": "+15555550123"
+    },
+    "challenge_metadata": {
+      "method_type": "SMS_OTP",
+      "phone_number": "+15555550123",
+      "status": "PENDING"
+    },
+    "challenge_orchestrated_by": "LITHIC",
+    "channel": "BROWSER",
+    "created": "2026-07-25T12:34:56Z",
+    "decision_made_by": "LITHIC_RULES",
+    "merchant": {
+      "id": "OODKZAPJVN4YS7O",
+      "country": "USA",
+      "mcc": "5357",
+      "name": "COFFEE BAR"
+    },
+    "message_category": "PAYMENT_AUTHENTICATION",
+    "three_ds_requestor_challenge_indicator": "CHALLENGE_REQUESTED_MANDATE",
+    "token": "9f7b1d2e-4c3a-4f58-9c11-2a6d5e8b7c04",
+    "transaction": {
+      "amount": 12.34,
+      "cardholder_amount": 12.34,
+      "currency": "USD",
+      "currency_exponent": 2,
+      "date_time": "2026-07-25T12:34:55Z",
+      "type": "GOODS_SERVICE_PURCHASE"
+    }
+  },
+  "challenge": {
+    "challenge_method_type": "OUT_OF_BAND",
+    "expiry_time": "2026-07-25T12:39:56Z",
+    "start_time": "2026-07-25T12:34:56Z"
+  },
+  "event_type": "three_ds_authentication.challenge"
+}
