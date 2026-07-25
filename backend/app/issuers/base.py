@@ -108,7 +108,37 @@ class FundingStatus(StrEnum):
 
 
 class IssuerError(Exception):
-    """Base class for every failure originating at a provider or its adapter."""
+    """Base class for every failure originating at a provider or its adapter.
+
+    `retryable` answers the one question the funding engine has about a failure
+    it cannot otherwise interpret: **could the identical call succeed if it were
+    made again?** A 429 or a 503 says yes; a card that does not exist says no.
+    The engine sees `IssuerError` and never the concrete type, so without this
+    the distinction could not cross `issuers/base.py` at all — each adapter knew
+    it privately and nobody above could ask (docs/ARCHITECTURE.md §9.1).
+
+    It is a marker, not an instruction: *how* to retry — how many times, how far
+    apart, and what a exhausted budget turns into — is the engine's policy and
+    stays out of here. Adapters that retry internally (both HTTP clients do) have
+    already spent their own attempts by the time one of these is raised.
+
+    Not retryable is the default, deliberately. A wrongly-retried permanent
+    refusal spends the retry budget a genuinely transient failure needed and
+    delays the `FAILED_*` an operator has to see, whereas a wrongly-failed
+    transient error is one intent to re-open. The cheaper mistake is the default.
+    """
+
+    #: Class attribute, so every subclass has it whether or not it sets one, and
+    #: an adapter whose failure is *always* transient can say so once by
+    #: overriding it rather than at every raise site.
+    retryable: bool = False
+
+    def __init__(self, *args: object, retryable: bool | None = None) -> None:
+        super().__init__(*args)
+        # `None` rather than `False`: an explicit default here would silently
+        # overwrite a subclass's own, which is the point of the class attribute.
+        if retryable is not None:
+            self.retryable = retryable
 
 
 class CardNotFoundError(IssuerError):

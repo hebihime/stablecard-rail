@@ -91,7 +91,7 @@ class StripeApiError(IssuerError):
         request_log_url: str | None = None,
         retryable: bool = False,
     ) -> None:
-        super().__init__(f"stripe: {message} (status {status})")
+        super().__init__(f"stripe: {message} (status {status})", retryable=retryable)
         self.message = message
         #: `0` when nothing answered at all — a timeout or a refused connection.
         self.status = status
@@ -104,7 +104,6 @@ class StripeApiError(IssuerError):
         self.request_id = request_id
         #: A Dashboard link straight to the failing request.
         self.request_log_url = request_log_url
-        self.retryable = retryable
 
 
 def checked_api_key(api_key: str) -> str:

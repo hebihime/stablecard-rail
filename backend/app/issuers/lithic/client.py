@@ -93,13 +93,12 @@ class LithicApiError(IssuerError):
         request_id: str | None = None,
         retryable: bool = False,
     ) -> None:
-        super().__init__(f"lithic: {message} (status {status})")
+        super().__init__(f"lithic: {message} (status {status})", retryable=retryable)
         self.message = message
         #: `0` when nothing answered at all — a timeout or a refused connection.
         self.status = status
         #: Lithic's `debugging_request_id`, which is the first thing their support asks for.
         self.request_id = request_id
-        self.retryable = retryable
 
 
 class LithicClient:

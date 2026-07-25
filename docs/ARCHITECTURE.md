@@ -641,15 +641,12 @@ Recorded here when their phase lands, per SPEC.md §11:
 - **`deposit_address → card` index** for the chain watcher, projected from the
   ledger's `card.created` events — phase 5 (see §3.4).
 - **Reconciler thresholds** for stuck intents — phase 5.
-- **A retryable marker on issuer errors.** Both `lithic/client.py` and
-  `stripe_issuing/client.py` know which failures are worth retrying (429, 5xx,
-  timeouts) and retry them themselves, but that knowledge cannot cross
-  `issuers/base.py` — so the funding engine cannot yet tell "the provider is busy"
-  from "the provider refused". Phase 5 needs the distinction to decide between a retry
-  and a `FAILED` intent; adding it before there is a consumer would be guessing at the
-  shape. **Phase 4 raised the evidence rather than settling it:** two adapters now
-  carry an unused `retryable` flag on their own error types, and they agree on the
-  status set, so the shape is no longer a guess — it is waiting on phase 5's consumer.
+- ~~**A retryable marker on issuer errors.**~~ **Settled in phase 5 — see §9.1.**
+  `IssuerError.retryable` now carries what both clients already knew privately, and
+  the funding engine can tell "the provider is busy" from "the provider refused"
+  without knowing which provider it is. Deferring it until there was a consumer was
+  the right call: the consumer is what settled it as a per-raise flag rather than an
+  exception subclass.
 - **A pooled HTTP client with a shutdown hook.** Both clients open a connection per
   request to avoid putting a resource lifetime on the issuer interface (§4.3). A
   production path pools connections and closes them from a FastAPI lifespan, which
@@ -1321,3 +1318,67 @@ So: **validate eagerly when the failure would otherwise be silent or misattribut
 validate on the request path when it would not.** The Stripe adapter was written to that
 rule from the start (§8.6), which is how the Lithic version came to light at all —
 building the second adapter is what made the first one's placement visible as a choice.
+
+---
+
+## 9. Decisions recorded in phase 5
+
+Phase 5 is where the pipeline stops being a set of parts. Everything before it was
+driven by a caller — an HTTP request, a webhook, a demo script. This phase adds the
+two things that move money on their own: a watcher that turns an on-chain event into
+an intent, and an engine that walks that intent to `FUNDED` without anyone asking.
+
+The rule that shapes all of it: **`advance()` remains the only writer of funding
+state.** The engine decides *what* hop to attempt and *whether* a failure is worth
+another go; the transition table decides whether the hop is legal, and the ledger
+records it either way. An engine that could write `intent.state` directly would make
+the phase-1 guarantee decorative.
+
+### 9.1 A retryable marker on issuer errors
+
+Deferred since phase 3 and listed in §5, on the explicit ground that adding it before
+there was a consumer would be guessing at the shape. Phase 5 is the consumer.
+
+The engine catches `IssuerError` — it never learns which provider raised, by the
+module rule (§6) — and has to choose between two very different actions:
+
+| The provider said | The engine should |
+| --- | --- |
+| 429, 503, or nothing at all (timeout) | try the same call again; the funding may yet land |
+| no such card, canceled card, amount refused | stop, and mark the intent `FAILED_FUNDING` |
+
+Without a marker on the shared base class, that choice cannot be made from above
+`issuers/`. Both HTTP clients already *knew* the answer — each carried a private
+`retryable` flag on its own error type, and the two independently arrived at the same
+status set (`429, 500, 502, 503, 504`, plus a status of `0` for "nothing answered") —
+but the knowledge stopped at the package boundary. So this is not a new idea, it is
+the same idea moved to where the caller can reach it: `IssuerError.retryable`, with
+`LithicApiError` and `StripeApiError` passing their existing determination through.
+
+Three things it deliberately is not:
+
+- **Not an instruction.** It says a retry *could* work, not that one should happen,
+  how many times, or how far apart. Retry policy is the engine's, and it belongs
+  next to `retry_count` and the transition table rather than in an adapter. Both
+  clients have already exhausted their own internal HTTP retries before raising.
+- **Not an exception hierarchy.** A `TransientIssuerError` subclass would have made
+  retryability a property of the error's *type*, and the same Stripe error type is
+  transient at 503 and permanent at 404. The flag varies per raise because the
+  reality does.
+- **Not true by default.** A wrongly-retried permanent refusal spends the retry
+  budget a genuinely transient failure needed and delays the `FAILED_*` an operator
+  has to see; a wrongly-failed transient error costs one re-opened intent. The
+  cheaper mistake is the default, so `retryable` is opt-in per failure.
+
+It is a class attribute with a keyword override rather than a plain constructor
+argument, so an adapter whose failures are *always* transient can say so once by
+subclassing instead of restating it at every raise site.
+`tests/test_issuer_interface.py` pins that, along with the default being `False` for
+every error the base module defines.
+
+**What this does not cover, and what the engine does about it.** An exception that is
+not an `IssuerError` at all — a bug in our code, a database blip — has no marker and
+deserves no guess. The engine treats those as a third case: it leaves the intent in
+its current state rather than failing it, and the reconciler (§5.3) picks it up. That
+keeps a deploy-time `AttributeError` from permanently killing every in-flight intent,
+which is what "unknown means failed" would have done.

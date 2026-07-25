@@ -21,14 +21,22 @@ from app.issuers.base import (
     CardEvent,
     CardEventType,
     Cardholder,
+    CardholderNotFoundError,
     CardIssuerAdapter,
+    CardNotFoundError,
     CardState,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
+    FundingRejectedError,
     FundingResult,
     FundingStatus,
+    IllegalCardTransitionError,
+    IssuerError,
+    WebhookParseError,
 )
+from app.issuers.lithic.client import LithicApiError
+from app.issuers.stripe_issuing.client import StripeApiError
 
 #: Exactly the methods SPEC.md §3.1 specifies, plus the two documented additions
 #: (docs/ARCHITECTURE.md §3.3): `get_card` and `webhook_event_id`.
@@ -206,3 +214,61 @@ def test_the_issuers_reference_is_optional_because_pending_funding_has_none() ->
 
 def test_deposit_address_is_optional_so_fiat_rail_adapters_need_not_invent_one() -> None:
     assert Card.model_fields["deposit_address"].default is None
+
+
+# ------------------------------------------------------------------ errors ----
+#
+# The funding engine (phase 5) catches `IssuerError` and has to decide between
+# retrying and failing the intent, knowing nothing about which provider raised.
+# That decision is what `retryable` carries across the boundary.
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        CardNotFoundError("card_1"),
+        CardholderNotFoundError("ch_1"),
+        IllegalCardTransitionError("card_1", CardState.CANCELED, CardState.ACTIVE),
+        FundingRejectedError("card_1", "insufficient program balance"),
+        WebhookParseError("body is not JSON"),
+        IssuerError("something went wrong"),
+    ],
+)
+def test_every_issuer_error_says_whether_a_retry_could_help(error: IssuerError) -> None:
+    # Readable off any `IssuerError` without a cast or a provider import: an
+    # engine that has to ask `isinstance(exc, LithicApiError)` first is an engine
+    # that has to change when a fourth adapter lands.
+    assert error.retryable is False
+
+
+def test_not_retryable_is_the_default_because_a_wrong_true_loops_on_a_refusal() -> None:
+    # A permanent refusal retried is worse than a failed intent: it spends the
+    # retry budget a genuinely transient failure needed, and delays the FAILED_*
+    # an operator has to see. So the flag is opt-in, per failure, at the adapter.
+    assert IssuerError.retryable is False
+    assert IssuerError("busy", retryable=True).retryable is True
+
+
+def test_an_adapter_may_declare_a_permanently_retryable_error_type() -> None:
+    # Construction must not clobber a subclass's own default, or "this failure is
+    # always transient" would have to be restated at every raise site.
+    class ProviderUnavailableError(IssuerError):
+        retryable = True
+
+    assert ProviderUnavailableError("upstream is down").retryable is True
+    assert ProviderUnavailableError("gave up", retryable=False).retryable is False
+
+
+@pytest.mark.parametrize("error_type", [LithicApiError, StripeApiError])
+def test_both_real_providers_report_retryability_through_the_shared_base(
+    error_type: type[IssuerError],
+) -> None:
+    # The two adapters already agreed on *which* failures are worth retrying
+    # (429 and 5xx, and a timeout that answered nothing). What phase 5 adds is
+    # that the agreement is legible from above `issuers/`.
+    busy = error_type("service unavailable", status=503, retryable=True)  # type: ignore[call-arg]
+    refused = error_type("no such card", status=404)  # type: ignore[call-arg]
+
+    assert isinstance(busy, IssuerError) and isinstance(refused, IssuerError)
+    assert busy.retryable is True
+    assert refused.retryable is False
