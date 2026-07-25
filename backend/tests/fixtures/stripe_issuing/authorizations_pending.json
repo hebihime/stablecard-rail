@@ -1,0 +1,58 @@
+{
+  "object": "list",
+  "url": "/v1/issuing/authorizations",
+  "has_more": false,
+  "data": [
+    {
+      "id": "iauth_1SbAuthStablecard003",
+      "object": "issuing.authorization",
+      "amount": 3000,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "approved": true,
+      "authorization_method": "online",
+      "balance_transactions": [],
+      "card": {
+        "id": "ic_1SbCardStablecard0001",
+        "object": "issuing.card",
+        "brand": "Visa",
+        "currency": "usd",
+        "exp_month": 8,
+        "exp_year": 2029,
+        "last4": "4242",
+        "status": "active",
+        "type": "virtual"
+      },
+      "cardholder": "ich_1SbHolderStablecard01",
+      "created": 1785003000,
+      "currency": "usd",
+      "livemode": false,
+      "merchant_amount": 3000,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "hotels_motels_resorts",
+        "category_code": "7011",
+        "city": "NEW YORK",
+        "country": "US",
+        "name": "THE ANALYTICAL HOTEL",
+        "network_id": "1234567890",
+        "postal_code": "10128",
+        "state": "NY"
+      },
+      "metadata": {},
+      "pending_request": null,
+      "request_history": [],
+      "status": "pending",
+      "transactions": [],
+      "verification_data": {
+        "address_line1_check": "not_provided",
+        "address_postal_code_check": "not_provided",
+        "cvc_check": "match",
+        "expiry_check": "match"
+      },
+      "wallet": null
+    }
+  ]
+}

@@ -63,7 +63,9 @@ from app.issuers.base import (
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
+    FundingRejectedError,
     FundingResult,
+    FundingStatus,
     IllegalCardTransitionError,
     IssuerError,
 )
@@ -115,6 +117,11 @@ EXTERNAL_REF_KEY = f"{METADATA_NAMESPACE}external_ref"
 #: physical cards only.
 MEMO_KEY = f"{METADATA_NAMESPACE}memo"
 
+#: The last funding applied to this card, held by the provider so that it survives
+#: our crashing between the call and our own commit.
+FUNDING_REF_KEY = f"{METADATA_NAMESPACE}funding_ref"
+FUNDING_AMOUNT_KEY = f"{METADATA_NAMESPACE}funding_amount"
+
 #: Stripe caps the cardholder display name and documents "no special characters
 #: or numbers" for it.
 NAME_MAX_LENGTH = 24
@@ -137,13 +144,17 @@ SANDBOX_ADDRESS: Mapping[str, str] = {
     "country": "US",
 }
 
-#: Namespace for the deterministic `Idempotency-Key` on card creation.
-_IDEMPOTENCY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:stablecard:stripe-issuing:create-card")
+#: Namespaces for the deterministic `Idempotency-Key`s. Two of them, so a card
+#: creation and a funding can never derive the same key.
+_CREATE_CARD_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:stablecard:stripe-issuing:create-card")
+_FUND_CARD_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:stablecard:stripe-issuing:fund-card")
 
 __all__ = [
     "ACTIVATED_AT_KEY",
     "ALL_TIME",
     "CARD_STATUSES",
+    "FUNDING_AMOUNT_KEY",
+    "FUNDING_REF_KEY",
     "PROVIDER_ID",
     "SANDBOX_ADDRESS",
     "StripeIssuingAdapter",
@@ -377,10 +388,142 @@ class StripeIssuingAdapter(CardIssuerAdapter):
     # --------------------------------------------------------------- money ----
 
     async def fund_card(self, card_id: str, amount: Money, funding_ref: str) -> FundingResult:
-        raise NotImplementedError("phase 4d")
+        """Fund by raising the card's `all_time` spending limit.
+
+        Stripe cards spend from the *account's* Issuing balance; there is no
+        per-card balance to move money into, so the one per-card dial is the
+        spending limit — and `all_time` is the only interval that behaves like a
+        balance rather than an allowance that resets.
+
+        Idempotency comes from two places, deliberately. `Idempotency-Key` covers a
+        retry inside Stripe's 24-hour window and replays *their* record, which is
+        the stronger guarantee and one Lithic could not offer (their key works on
+        creation only). The metadata marker covers a retry after that window, and
+        survives our crashing mid-call because the provider holds it. What neither
+        can do is remember an older ref once a newer funding has replaced the
+        marker — the same limitation Lithic's memo tag has, kept identical on
+        purpose (docs/ARCHITECTURE.md §8.4).
+        """
+        payload = await self._read_card(card_id)
+        current = self._to_card(payload)
+        metadata = _our_metadata(payload)
+
+        if metadata.get(FUNDING_REF_KEY) == funding_ref:
+            applied = _applied_amount(card_id, funding_ref, metadata)
+            if applied != amount.amount_minor:
+                raise FundingRejectedError(
+                    card_id,
+                    f"funding ref {funding_ref!r} was already applied for "
+                    f"{applied} minor units, not {amount.amount_minor}",
+                )
+            return self._funding_result(
+                card_id, amount, funding_ref, current.spend_limit_minor or 0, replayed=True
+            )
+
+        if amount.amount_minor <= 0:
+            raise FundingRejectedError(card_id, f"amount must be positive, got {amount}")
+        if amount.currency != current.currency:
+            raise FundingRejectedError(
+                card_id, f"card is denominated in {current.currency}, not {amount.currency}"
+            )
+        if current.state is CardState.CANCELED:
+            raise FundingRejectedError(card_id, "card is canceled")
+        if current.spend_limit_minor is None:
+            raise FundingRejectedError(
+                card_id,
+                f"card has no {ALL_TIME} spending limit, which Stripe reads as unlimited; "
+                f"raising it would replace an unlimited card with a limited one. A limit on "
+                f"another interval does not count: it resets, so funding would leak away.",
+            )
+
+        raised = current.spend_limit_minor + amount.amount_minor
+        try:
+            await self._client.post(
+                f"/issuing/cards/{card_id}",
+                body={
+                    "spending_controls": {
+                        # Restated every time: a limit on any other interval is not a
+                        # balance, and this write replaces the whole control.
+                        "spending_limits": [{"amount": raised, "interval": ALL_TIME}],
+                        "spending_limits_currency": current.currency.lower(),
+                    },
+                    # Our own keys restated alongside the new marker, for the reason
+                    # in `activate_card`.
+                    "metadata": {
+                        **metadata,
+                        FUNDING_REF_KEY: funding_ref,
+                        FUNDING_AMOUNT_KEY: str(amount.amount_minor),
+                    },
+                },
+                idempotency_key=_funding_key(card_id, funding_ref, amount),
+            )
+        except StripeApiError as exc:
+            raise self._translate(card_id, exc) from exc
+        return self._funding_result(
+            card_id, amount, funding_ref, raised, before=current.spend_limit_minor
+        )
+
+    def _funding_result(
+        self,
+        card_id: str,
+        amount: Money,
+        funding_ref: str,
+        after: int,
+        *,
+        before: int | None = None,
+        replayed: bool = False,
+    ) -> FundingResult:
+        return FundingResult(
+            provider_id=self.provider_id,
+            card_id=card_id,
+            funding_ref=funding_ref,
+            # There is no provider-side funding object to name, so the reference is
+            # the provider-side *result*: this card at this limit. That is what a
+            # reconciler can actually go and check.
+            issuer_funding_ref=f"{card_id}:{after}",
+            status=FundingStatus.SUCCEEDED,
+            amount=amount,
+            raw={
+                "spending_limit_before": before if before is not None else after,
+                "spending_limit_after": after,
+                "replayed": replayed,
+            },
+        )
 
     async def get_balance(self, card_id: str) -> Money:
-        raise NotImplementedError("phase 4d")
+        """Available spend: the card's limit, less what it has spent and is holding.
+
+        Stripe exposes no per-card balance — `GET /v1/balance` reports the whole
+        account's Issuing funds — so this is derived, exactly as Lithic's is. The
+        numbers come from two endpoints rather than one: a settled purchase is a
+        negative `issuing.transaction` and a refund a positive one, so they sum
+        straight in, while an approved authorization still `pending` is a positive
+        hold and comes off. Nothing is counted twice, because an authorization
+        leaves `pending` precisely when it becomes a transaction or releases.
+
+        Both lists are read to the end, or a busy card reports a balance that is
+        too high.
+        """
+        card = self._to_card(await self._read_card(card_id))
+        if card.spend_limit_minor is None:
+            raise IssuerError(
+                f"card {card_id} has no {ALL_TIME} spending limit, which Stripe reads as "
+                f"unlimited; there is no available balance to report"
+            )
+        settled = await self._client.list_all("/issuing/transactions", params={"card": card_id})
+        holds = await self._client.list_all(
+            # Filtered provider-side: a closed authorization has either become a
+            # transaction or released its hold, so asking for one would be asking to
+            # double-count it.
+            "/issuing/authorizations",
+            params={"card": card_id, "status": "pending"},
+        )
+        return Money(
+            card.spend_limit_minor
+            + sum(_transaction_impact(entry) for entry in settled)
+            - sum(_authorization_hold(entry) for entry in holds),
+            card.currency,
+        )
 
     # ------------------------------------------------------------ webhooks ----
 
@@ -495,7 +638,69 @@ def _create_card_key(cardholder_id: str, req: CreateCardRequest) -> str:
     why `fund_card` does not rely on this alone (4d).
     """
     material = f"{cardholder_id}|{req.currency}|{req.spend_limit_minor}|{req.memo}"
-    return str(uuid.uuid5(_IDEMPOTENCY_NAMESPACE, material))
+    return str(uuid.uuid5(_CREATE_CARD_NAMESPACE, material))
+
+
+def _funding_key(card_id: str, funding_ref: str, amount: Money) -> str:
+    """A deterministic `Idempotency-Key` for one logical funding.
+
+    The amount is part of the material on purpose: two calls with the same ref and
+    different amounts must not be quietly collapsed into one by Stripe's
+    idempotency layer, they must reach the check in `fund_card` and be refused.
+    """
+    material = f"{card_id}|{funding_ref}|{amount.amount_minor}|{amount.currency}"
+    return str(uuid.uuid5(_FUND_CARD_NAMESPACE, material))
+
+
+def _applied_amount(card_id: str, funding_ref: str, metadata: Mapping[str, str]) -> int:
+    """What this ref was recorded as funding, from the card's own metadata.
+
+    An unreadable amount is refused rather than guessed at: funding again might
+    double it and assuming it landed might skip it, so the only answer that cannot
+    lose money silently is to stop and say the record is broken.
+    """
+    recorded = metadata.get(FUNDING_AMOUNT_KEY, "")
+    try:
+        return int(recorded)
+    except ValueError as exc:
+        raise FundingRejectedError(
+            card_id,
+            f"funding ref {funding_ref!r} is recorded on the card with an unreadable "
+            f"amount {recorded!r}, so whether it was applied cannot be established",
+        ) from exc
+
+
+def _transaction_impact(transaction: Mapping[str, Any]) -> int:
+    """What one settled transaction does to available spend, in minor units.
+
+    Stripe signs these for us — a capture is negative and a refund positive — so
+    there is no status table to get wrong. Reading one wrong must fail loudly
+    rather than contribute nothing, because a plausible wrong balance funds the
+    wrong amount.
+    """
+    amount = transaction.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise IssuerError(
+            f"stripe transaction {transaction.get('id')!r} has a non-integer amount: {amount!r}"
+        )
+    return amount
+
+
+def _authorization_hold(authorization: Mapping[str, Any]) -> int:
+    """What one pending authorization is holding, in minor units.
+
+    Only an *approved* one holds anything: declined money is not held money, and
+    treating it as held would understate the balance and refuse a top-up the card
+    could take.
+    """
+    if authorization.get("approved") is not True:
+        return 0
+    amount = authorization.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, int):
+        raise IssuerError(
+            f"stripe authorization {authorization.get('id')!r} has a non-integer amount: {amount!r}"
+        )
+    return amount
 
 
 def _checked_limit(spend_limit_minor: int) -> int:
