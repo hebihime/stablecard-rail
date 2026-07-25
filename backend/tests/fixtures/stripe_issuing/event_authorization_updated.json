@@ -1,7 +1,9 @@
 {
-  "data": [
-    {
-      "amount": 3000,
+  "api_version": "2026-06-24.dahlia",
+  "created": 1784979754,
+  "data": {
+    "object": {
+      "amount": 0,
       "amount_details": {
         "atm_fee": null,
         "cashback_amount": 0
@@ -10,22 +12,40 @@
       "authorization_method": "online",
       "balance_transactions": [
         {
-          "amount": -3000,
-          "available_on": 1784979755,
+          "amount": -500,
+          "available_on": 1784979753,
           "balance_type": "issuing",
-          "created": 1784979755,
+          "created": 1784979753,
           "currency": "usd",
           "description": "Hold for authorization",
           "exchange_rate": null,
           "fee": 0,
           "fee_details": [],
-          "id": "txn_1Tx3yRJW5k9HL9eO5i6MOoVq",
-          "net": -3000,
+          "id": "txn_1Tx3yPJW5k9HL9eOTCgCbcRK",
+          "net": -500,
           "object": "balance_transaction",
           "reporting_category": "issuing_authorization_hold",
-          "source": "iauth_1Tx3yQJW5k9HL9eOvJWrofdJ",
+          "source": "iauth_1Tx3yOJW5k9HL9eOxU1mCanQ",
           "status": "available",
           "type": "issuing_authorization_hold"
+        },
+        {
+          "amount": 500,
+          "available_on": 1784979753,
+          "balance_type": "issuing",
+          "created": 1784979753,
+          "currency": "usd",
+          "description": "Released hold for authorization due to reversal",
+          "exchange_rate": null,
+          "fee": 0,
+          "fee_details": [],
+          "id": "txn_1Tx3yQJW5k9HL9eO2GahTzFj",
+          "net": 500,
+          "object": "balance_transaction",
+          "reporting_category": "issuing_authorization_release",
+          "source": "iauth_1Tx3yOJW5k9HL9eOxU1mCanQ",
+          "status": "available",
+          "type": "issuing_authorization_release"
         }
       ],
       "card": {
@@ -147,20 +167,20 @@
       },
       "card_presence": "not_present",
       "cardholder": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
-      "created": 1784979754,
+      "created": 1784979752,
       "currency": "usd",
       "fleet": null,
       "fuel": null,
-      "id": "iauth_1Tx3yQJW5k9HL9eOvJWrofdJ",
+      "id": "iauth_1Tx3yOJW5k9HL9eOxU1mCanQ",
       "livemode": false,
-      "merchant_amount": 3000,
+      "merchant_amount": 0,
       "merchant_currency": "usd",
       "merchant_data": {
-        "category": "eating_places_restaurants",
-        "category_code": "5812",
+        "category": "taxicabs_limousines",
+        "category_code": "4121",
         "city": "San Francisco",
         "country": "US",
-        "name": "THE ANALYTICAL DINER",
+        "name": "YELLOW CAB CO",
         "network_id": "1234567890",
         "postal_code": "94103",
         "state": "CA",
@@ -172,22 +192,22 @@
       "network_data": {
         "acquiring_institution_id": "123456",
         "system_trace_audit_number": "1234567890",
-        "transaction_id": "test_766329255701857"
+        "transaction_id": "test_218345284220423"
       },
       "object": "issuing.authorization",
       "pending_request": null,
       "request_history": [
         {
-          "amount": 3000,
+          "amount": 500,
           "amount_details": {
             "atm_fee": null,
             "cashback_amount": null
           },
           "approved": true,
-          "authorization_code": "S05137",
-          "created": 1784979755,
+          "authorization_code": "S37759",
+          "created": 1784979753,
           "currency": "usd",
-          "merchant_amount": 3000,
+          "merchant_amount": 500,
           "merchant_currency": "usd",
           "network_risk_score": 10,
           "reason": "card_active",
@@ -195,7 +215,7 @@
           "requested_at": 1768262400
         }
       ],
-      "status": "pending",
+      "status": "reversed",
       "token": null,
       "transactions": [],
       "verification_data": {
@@ -209,9 +229,20 @@
       },
       "verified_by_fraud_challenge": false,
       "wallet": null
+    },
+    "previous_attributes": {
+      "amount": 500,
+      "merchant_amount": 500,
+      "status": "pending"
     }
-  ],
-  "has_more": false,
-  "object": "list",
-  "url": "/v1/issuing/authorizations"
+  },
+  "id": "evt_1Tx3yQJW5k9HL9eO2vhL1LDM",
+  "livemode": false,
+  "object": "event",
+  "pending_webhooks": 0,
+  "request": {
+    "id": "req_jcWcbWdHCtKGfA",
+    "idempotency_key": "2d9d7b19-7ebd-463a-95d5-12af637b201d"
+  },
+  "type": "issuing_authorization.updated"
 }

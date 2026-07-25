@@ -1,6 +1,6 @@
 {
-  "api_version": "2025-03-31.basil",
-  "created": 1785000001,
+  "api_version": "2026-06-24.dahlia",
+  "created": 1784979741,
   "data": {
     "object": {
       "billing": {
@@ -14,37 +14,47 @@
         }
       },
       "company": null,
-      "created": 1785000000,
+      "created": 1784979741,
       "email": "ada@example.test",
-      "id": "ich_1SbHolderStablecard01",
+      "id": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
       "individual": {
         "card_issuing": {
           "user_terms_acceptance": {
-            "date": null,
-            "ip": null,
+            "date": 1785000000,
+            "ip": "127.0.0.1",
             "user_agent": null
           }
         },
         "dob": null,
         "first_name": "Ada",
         "last_name": "Lovelace",
-        "verification": null
+        "verification": {
+          "document": {
+            "back": null,
+            "front": null
+          }
+        }
       },
       "livemode": false,
       "metadata": {
-        "stablecard_external_ref": "user-42"
+        "stablecard_external_ref": "user-42",
+        "stablecard_run": "record_stripe_fixtures"
       },
       "name": "Ada Lovelace",
       "object": "issuing.cardholder",
       "phone_number": "+15555550123",
-      "redaction": null,
+      "preferred_locales": [],
       "requirements": {
-        "disabled_reason": null,
+        "disabled_reason": "under_review",
         "past_due": []
       },
       "spending_controls": {
-        "allowed_categories": null,
-        "blocked_categories": null,
+        "allowed_card_presences": [],
+        "allowed_categories": [],
+        "allowed_merchant_countries": [],
+        "blocked_card_presences": [],
+        "blocked_categories": [],
+        "blocked_merchant_countries": [],
         "spending_limits": [],
         "spending_limits_currency": null
       },
@@ -52,13 +62,13 @@
       "type": "individual"
     }
   },
-  "id": "evt_1SbEvHolderMade001",
+  "id": "evt_1Tx3yEJW5k9HL9eON35XV5yz",
   "livemode": false,
   "object": "event",
-  "pending_webhooks": 1,
+  "pending_webhooks": 0,
   "request": {
-    "id": null,
-    "idempotency_key": null
+    "id": "req_0ldJubFqMwPWfn",
+    "idempotency_key": "472720d3-bf42-4fa0-9916-8645e028f106"
   },
   "type": "issuing_cardholder.created"
 }

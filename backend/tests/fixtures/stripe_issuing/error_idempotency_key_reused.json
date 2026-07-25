@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "Keys for idempotent requests can only be used with the same parameters they were first used with. Try using a key other than 'c641db61-505f-492a-870f-00051ae316db' if you meant to execute a different request.",
+    "request_log_url": "https://dashboard.stripe.com/acct_stablecard000001/test/workbench/logs?object=req_RvKns7vyNKhGSp",
+    "type": "idempotency_error"
+  }
+}

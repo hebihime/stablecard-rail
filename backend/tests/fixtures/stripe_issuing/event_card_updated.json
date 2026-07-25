@@ -1,6 +1,6 @@
 {
   "api_version": "2026-06-24.dahlia",
-  "created": 1784979742,
+  "created": 1784979757,
   "data": {
     "object": {
       "brand": "Visa",
@@ -48,7 +48,7 @@
         "phone_number": "+15555550123",
         "preferred_locales": [],
         "requirements": {
-          "disabled_reason": "under_review",
+          "disabled_reason": null,
           "past_due": []
         },
         "spending_controls": {
@@ -74,6 +74,9 @@
       "lifecycle_controls": null,
       "livemode": false,
       "metadata": {
+        "stablecard_activated_at": "2026-07-25T18:05:00+00:00",
+        "stablecard_funding_amount": "2500",
+        "stablecard_funding_ref": "intent-1",
         "stablecard_memo": "StableCard Rail fixture",
         "stablecard_run": "record_stripe_fixtures"
       },
@@ -95,14 +98,14 @@
         "blocked_merchant_countries": null,
         "spending_limits": [
           {
-            "amount": 100000,
+            "amount": 102500,
             "categories": [],
             "interval": "all_time"
           }
         ],
         "spending_limits_currency": "usd"
       },
-      "status": "inactive",
+      "status": "canceled",
       "type": "virtual",
       "wallets": {
         "apple_pay": {
@@ -115,15 +118,18 @@
         },
         "primary_account_identifier": null
       }
+    },
+    "previous_attributes": {
+      "status": "active"
     }
   },
-  "id": "evt_1Tx3yEJW5k9HL9eOXXYFAH29",
+  "id": "evt_1Tx3yUJW5k9HL9eOuEFoFBgE",
   "livemode": false,
   "object": "event",
   "pending_webhooks": 0,
   "request": {
-    "id": "req_1ZYkVftlSuNohw",
-    "idempotency_key": "c641db61-505f-492a-870f-00051ae316db"
+    "id": "req_iriBeQJzo3r3Pc",
+    "idempotency_key": "4758f9b6-0e41-4910-b804-7eb515d9ef09"
   },
-  "type": "issuing_card.created"
+  "type": "issuing_card.updated"
 }

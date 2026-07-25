@@ -1,0 +1,270 @@
+{
+  "amount": 1234,
+  "amount_details": {
+    "atm_fee": null,
+    "cashback_amount": 0
+  },
+  "approved": true,
+  "authorization_method": "online",
+  "balance_transactions": [
+    {
+      "amount": -1234,
+      "available_on": 1784979748,
+      "balance_type": "issuing",
+      "created": 1784979748,
+      "currency": "usd",
+      "description": "Hold for authorization",
+      "exchange_rate": null,
+      "fee": 0,
+      "fee_details": [],
+      "id": "txn_1Tx3yKJW5k9HL9eOL4sgCgT8",
+      "net": -1234,
+      "object": "balance_transaction",
+      "reporting_category": "issuing_authorization_hold",
+      "source": "iauth_1Tx3yJJW5k9HL9eOjk0tiguI",
+      "status": "available",
+      "type": "issuing_authorization_hold"
+    },
+    {
+      "amount": 1234,
+      "available_on": 1784979749,
+      "balance_type": "issuing",
+      "created": 1784979749,
+      "currency": "usd",
+      "description": "Released hold for authorization due to capture",
+      "exchange_rate": null,
+      "fee": 0,
+      "fee_details": [],
+      "id": "txn_1Tx3yLJW5k9HL9eOke4u0bEM",
+      "net": 1234,
+      "object": "balance_transaction",
+      "reporting_category": "issuing_authorization_release",
+      "source": "iauth_1Tx3yJJW5k9HL9eOjk0tiguI",
+      "status": "available",
+      "type": "issuing_authorization_release"
+    }
+  ],
+  "card": {
+    "brand": "Visa",
+    "cancellation_reason": null,
+    "cardholder": {
+      "billing": {
+        "address": {
+          "city": "New York",
+          "country": "US",
+          "line1": "1 Analytical Engine Way",
+          "line2": null,
+          "postal_code": "10128",
+          "state": "NY"
+        }
+      },
+      "company": null,
+      "created": 1784979741,
+      "email": "ada@example.test",
+      "id": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
+      "individual": {
+        "card_issuing": {
+          "user_terms_acceptance": {
+            "date": 1785000000,
+            "ip": "127.0.0.1",
+            "user_agent": null
+          }
+        },
+        "dob": null,
+        "first_name": "Ada",
+        "last_name": "Lovelace",
+        "verification": {
+          "document": {
+            "back": null,
+            "front": null
+          }
+        }
+      },
+      "livemode": false,
+      "metadata": {
+        "stablecard_external_ref": "user-42",
+        "stablecard_run": "record_stripe_fixtures"
+      },
+      "name": "Ada Lovelace",
+      "object": "issuing.cardholder",
+      "phone_number": "+15555550123",
+      "preferred_locales": [],
+      "requirements": {
+        "disabled_reason": null,
+        "past_due": []
+      },
+      "spending_controls": {
+        "allowed_card_presences": [],
+        "allowed_categories": [],
+        "allowed_merchant_countries": [],
+        "blocked_card_presences": [],
+        "blocked_categories": [],
+        "blocked_merchant_countries": [],
+        "spending_limits": [],
+        "spending_limits_currency": null
+      },
+      "status": "active",
+      "type": "individual"
+    },
+    "created": 1784979742,
+    "currency": "usd",
+    "exp_month": 5,
+    "exp_year": 2029,
+    "id": "ic_1Tx3yEJW5k9HL9eO7U5wEI8n",
+    "last4": "0088",
+    "latest_fraud_warning": null,
+    "lifecycle_controls": null,
+    "livemode": false,
+    "metadata": {
+      "stablecard_activated_at": "2026-07-25T18:05:00+00:00",
+      "stablecard_funding_amount": "2500",
+      "stablecard_funding_ref": "intent-1",
+      "stablecard_memo": "StableCard Rail fixture",
+      "stablecard_run": "record_stripe_fixtures"
+    },
+    "migrate_tokens_from": null,
+    "object": "issuing.card",
+    "personalization_design": null,
+    "pin": null,
+    "replaced_by": null,
+    "replacement_for": null,
+    "replacement_reason": null,
+    "second_line": null,
+    "shipping": null,
+    "spending_controls": {
+      "allowed_card_presences": null,
+      "allowed_categories": null,
+      "allowed_merchant_countries": null,
+      "blocked_card_presences": null,
+      "blocked_categories": null,
+      "blocked_merchant_countries": null,
+      "spending_limits": [
+        {
+          "amount": 102500,
+          "categories": [],
+          "interval": "all_time"
+        }
+      ],
+      "spending_limits_currency": "usd"
+    },
+    "status": "active",
+    "type": "virtual",
+    "wallets": {
+      "apple_pay": {
+        "eligible": true,
+        "ineligible_reason": null
+      },
+      "google_pay": {
+        "eligible": true,
+        "ineligible_reason": null
+      },
+      "primary_account_identifier": null
+    }
+  },
+  "card_presence": "not_present",
+  "cardholder": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
+  "created": 1784979747,
+  "currency": "usd",
+  "fleet": null,
+  "fuel": null,
+  "id": "iauth_1Tx3yJJW5k9HL9eOjk0tiguI",
+  "livemode": false,
+  "merchant_amount": 1234,
+  "merchant_currency": "usd",
+  "merchant_data": {
+    "category": "computer_software_stores",
+    "category_code": "5734",
+    "city": "San Francisco",
+    "country": "US",
+    "name": "WWWW.BROWSEBUG.BIZ",
+    "network_id": "1234567890",
+    "postal_code": "94103",
+    "state": "CA",
+    "tax_id": null,
+    "terminal_id": "99999999",
+    "url": "https://rocketrides.io/"
+  },
+  "metadata": {},
+  "network_data": {
+    "acquiring_institution_id": "123456",
+    "system_trace_audit_number": "1234567890",
+    "transaction_id": "test_397796392543681"
+  },
+  "object": "issuing.authorization",
+  "pending_request": null,
+  "request_history": [
+    {
+      "amount": 1234,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "approved": true,
+      "authorization_code": "S22124",
+      "created": 1784979748,
+      "currency": "usd",
+      "merchant_amount": 1234,
+      "merchant_currency": "usd",
+      "network_risk_score": 10,
+      "reason": "card_active",
+      "reason_message": null,
+      "requested_at": 1768262400
+    }
+  ],
+  "status": "closed",
+  "token": null,
+  "transactions": [
+    {
+      "amount": -1234,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": 0
+      },
+      "authorization": "iauth_1Tx3yJJW5k9HL9eOjk0tiguI",
+      "balance_transaction": "txn_1Tx3yLJW5k9HL9eOYmZuaLAH",
+      "card": "ic_1Tx3yEJW5k9HL9eO7U5wEI8n",
+      "cardholder": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
+      "created": 1784979748,
+      "currency": "usd",
+      "dispute": null,
+      "id": "ipi_1Tx3yKJW5k9HL9eOGUQo7vfv",
+      "livemode": false,
+      "merchant_amount": -1234,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "computer_software_stores",
+        "category_code": "5734",
+        "city": "San Francisco",
+        "country": "US",
+        "name": "WWWW.BROWSEBUG.BIZ",
+        "network_id": "1234567890",
+        "postal_code": "94103",
+        "state": "CA",
+        "tax_id": null,
+        "terminal_id": "99999999",
+        "url": "https://rocketrides.io/"
+      },
+      "metadata": {},
+      "network_data": {
+        "authorization_code": "S22124",
+        "processing_date": "2026-07-25",
+        "transaction_id": "test_397796392543681"
+      },
+      "object": "issuing.transaction",
+      "token": null,
+      "type": "capture",
+      "wallet": null
+    }
+  ],
+  "verification_data": {
+    "address_line1_check": "not_provided",
+    "address_postal_code_check": "not_provided",
+    "authentication_exemption": null,
+    "cvc_check": "not_provided",
+    "expiry_check": "match",
+    "postal_code": "94103",
+    "three_d_secure": null
+  },
+  "verified_by_fraud_challenge": false,
+  "wallet": null
+}

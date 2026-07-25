@@ -1,39 +1,48 @@
 {
-  "object": "list",
-  "url": "/v1/issuing/transactions",
-  "has_more": false,
   "data": [
     {
-      "id": "ipi_1SbTxnStablecard0000",
-      "object": "issuing.transaction",
-      "amount": -500,
+      "amount": -1234,
       "amount_details": {
         "atm_fee": null,
-        "cashback_amount": null
+        "cashback_amount": 0
       },
-      "authorization": "iauth_1SbAuthStablecard000",
-      "balance_transaction": "txn_1SbBalStablecard0000",
-      "card": "ic_1SbCardStablecard0001",
-      "cardholder": "ich_1SbHolderStablecard01",
-      "created": 1785000500,
+      "authorization": "iauth_1Tx3yJJW5k9HL9eOjk0tiguI",
+      "balance_transaction": "txn_1Tx3yLJW5k9HL9eOYmZuaLAH",
+      "card": "ic_1Tx3yEJW5k9HL9eO7U5wEI8n",
+      "cardholder": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
+      "created": 1784979748,
       "currency": "usd",
       "dispute": null,
+      "id": "ipi_1Tx3yKJW5k9HL9eOGUQo7vfv",
       "livemode": false,
-      "merchant_amount": -500,
+      "merchant_amount": -1234,
       "merchant_currency": "usd",
       "merchant_data": {
-        "category": "taxicabs_limousines",
-        "category_code": "4121",
-        "city": "NEW YORK",
+        "category": "computer_software_stores",
+        "category_code": "5734",
+        "city": "San Francisco",
         "country": "US",
-        "name": "YELLOW CAB CO",
+        "name": "WWWW.BROWSEBUG.BIZ",
         "network_id": "1234567890",
-        "postal_code": "10128",
-        "state": "NY"
+        "postal_code": "94103",
+        "state": "CA",
+        "tax_id": null,
+        "terminal_id": "99999999",
+        "url": "https://rocketrides.io/"
       },
       "metadata": {},
+      "network_data": {
+        "authorization_code": "S22124",
+        "processing_date": "2026-07-25",
+        "transaction_id": "test_397796392543681"
+      },
+      "object": "issuing.transaction",
+      "token": null,
       "type": "capture",
       "wallet": null
     }
-  ]
+  ],
+  "has_more": false,
+  "object": "list",
+  "url": "/v1/issuing/transactions"
 }

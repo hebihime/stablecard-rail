@@ -659,11 +659,16 @@ Recorded here when their phase lands, per SPEC.md §11:
   interface to save a connection setup would be answering a performance question by
   spending the thing being measured. Still deferred, now with a second adapter's worth
   of evidence that it is only a performance question.
-- **Recording Stripe fixtures from a live test-mode account**, and a
-  `scripts/demo_phase4.py` to match phases 1–3. Both need `STRIPE_ISSUING_API_KEY`,
-  which did not exist when phase 4 was built (§8.9). Until then the Stripe fixtures
-  are documentation-derived, which is weaker evidence than phase 3's recorder
-  produced.
+- **Verifying Stripe's webhook signature scheme against a real delivery** (§8.2). The
+  one thing in §8 a live API key could not settle: it needs
+  `STRIPE_ISSUING_WEBHOOK_SECRET` and an actual inbound webhook, which means a
+  Dashboard endpoint or `stripe listen` with a tunnel. Until then
+  `tests/test_stripe_signing.py` proves we are self-consistent, not that Stripe
+  agrees, and the `whsec_`-prefix question is the single open assumption.
+- **A real-time authorization endpoint**, if the demo should stop seeing occasional
+  `cardholder_verification_required` declines (§8.10). Stripe wants a decision inside
+  two seconds; this pipeline verifies, dedups and queues (SPEC.md §4), so serving it
+  would be a second, synchronous webhook path — a production-path feature, not a gap.
 - **`disable_existing_loggers=False` in `alembic/env.py`.** Running migrations
   currently switches off every logger the app created at import time, so no adapter's
   fail-closed webhook warning is observable from a test (§8.9). One line, found in
@@ -976,20 +981,18 @@ answer:
 - **`v0` is never accepted.** Trusting it would make every Dashboard "send test
   webhook" click a way to write to the ledger.
 
-**The evidence here is weaker than phase 3's, and the gap is the point of this
-entry.** Lithic publishes a worked example, so `test_lithic_signing.py` pins our
-implementation against *their* numbers. Stripe publishes no vector, so ours were
-computed independently of the implementation and are regression pins only. They
-prove we are self-consistent; they cannot prove Stripe agrees. The `whsec_` prefix
-question is the single assumption a real delivery would settle in one attempt.
+**This is the one thing in §8 still unverified, and it stayed unverified even after
+the fixtures were recorded (§8.10).** Lithic publishes a worked example, so
+`test_lithic_signing.py` pins our implementation against *their* numbers. Stripe
+publishes no vector, so ours were computed independently of the implementation and
+are regression pins only. They prove we are self-consistent; they cannot prove
+Stripe agrees.
 
-Same for the fixtures generally: `tests/fixtures/stripe_issuing/` is hand-authored
-from Stripe's published example objects, not recorded from a live account, which
-`README.md` in that directory states plainly. Anything Stripe sends that its
-reference omits — an extra field, a nullable that is never null, a status enum
-member the docs do not list — is invisible to this suite. The adapter is
-correspondingly strict: every "cannot read this" path is a loud `IssuerError` or an
-`UNMAPPED` event, never a fallback that looks like a number.
+An API key does not settle it: the question is how Stripe *signs an outbound
+delivery*, so it needs `STRIPE_ISSUING_WEBHOOK_SECRET` and a real inbound webhook —
+a Dashboard endpoint, or `stripe listen` with a tunnel. Everything else in this
+section has since been checked against a live account; this has not, and the
+`whsec_` prefix is the single assumption one genuine delivery would resolve.
 
 ### 8.3 `inactive` means two things, so the adapter keeps the missing bit
 
@@ -1014,14 +1017,20 @@ so that `UNACTIVATED` never arises, as Lithic's virtual cards genuinely never do
 (§4.1's third note). Rejected because Stripe's `inactive` card really does decline,
 so calling it active would be a claim about whether it can spend.
 
-**One unverified assumption, insured against rather than trusted.** Stripe documents
-`metadata` as merged key-by-key, so writing one key leaves the others alone. If it
-ever *replaced* the map, an unfreeze or a funding call would erase the funding
-idempotency record. So every write that touches metadata restates the `stablecard_*`
-keys it owns, which is correct under either behaviour and costs one read on
-`activate_card`. `freeze_card` and `cancel_card` send no metadata parameters at all,
-so there is nothing to merge or replace. Once a real key exists, a recorded fixture
-settles it and the restating can go.
+**The metadata assumption, now confirmed.** Stripe documents `metadata` as merged
+key-by-key; if it ever *replaced* the map, an unfreeze or a funding call would erase
+the funding idempotency record. So every write that touches metadata restates the
+`stablecard_*` keys it owns, which is correct under either behaviour and costs one
+read on `activate_card`. `freeze_card` and `cancel_card` send no metadata parameters
+at all, so there is nothing to merge or replace either way.
+
+The live recording settled it: the walk in `scripts/record_stripe_fixtures.py`
+freezes the card with a body containing no metadata, then asserts the activation
+marker is still there — and it is (`_check_marker_survived`, which prints "§8.3
+confirmed"). So the restating in `activate_card` is now insurance against a change
+in Stripe's behaviour rather than against our ignorance of it. Kept, because it is
+correct either way and one read on a lifecycle call is not worth optimising; the
+recorded `card_frozen` fixture is what would catch a regression.
 
 ### 8.4 Funding is a spending-limit raise, again — and better
 
@@ -1077,9 +1086,11 @@ rather than trusting the list to be complete.
 
 On the webhook path it is a **deliberate divergence from Lithic's adapter**, which
 keeps its delivered payloads untouched on the grounds that normalizing loses nothing.
-That reasoning holds only because Lithic's payloads are flat. Stripe's expand — an
-`issuing_card.created` delivery contains the cardholder's name, phone and postal
-address — so nested API objects are collapsed back to the ids they came from. The
+That reasoning holds only because Lithic's payloads are flat. Stripe's expand — and
+this is now confirmed against real deliveries, not inferred: the recorded
+`event_card_created` really does carry the whole cardholder object, name, phone and
+postal address included — so nested API objects are collapsed back to the ids they
+came from. The
 rule is narrow on purpose: only a mapping carrying both `object` and `id` is
 collapsed, because only a nested Stripe object can carry somebody's name. So
 `merchant_data`, `verification_data` and `request_history` survive whole, and a
@@ -1159,15 +1170,18 @@ Phase 7 gets the OTP path from the mock adapter's simulator, which SPEC.md §6 a
 allows for. If Stripe adds an issuer-facing challenge, `CardEventType` already has
 the member.
 
-### 8.9 What phase 4 could not test, and one defect it found
+### 8.9 What the abstraction test actually established
 
-The phase ran with **no Stripe credentials**, which bounds what it establishes.
-Every call shape, signature computation and mapping is exercised against
-documentation-derived fixtures; none has been seen to work against Stripe. The
-honest summary is that phase 4 proves the *abstraction* holds and leaves the
-*integration* unproven. Three things are waiting on a key: re-recording the fixtures
-from a real test-mode account, a `scripts/demo_phase4.py` to match phases 1–3, and
-settling the `whsec_` prefix question in §8.2.
+Phase 4 was built with **no Stripe credentials**, which bounded what it proved: every
+call shape, signature computation and event mapping was exercised against fixtures
+derived from Stripe's documentation, and none had been seen to work against Stripe. So
+the honest summary at the end of the phase was that it proved the *abstraction* held
+and left the *integration* unproven.
+
+A test-mode key arrived afterwards. §8.10 records what happened when the fixtures were
+re-recorded from a live account — three real adapter bugs, and confirmation of three
+things that had been assumptions. The claim in §8's preamble is unaffected: the
+adapter absorbed everything, and the fixes were all inside its own package.
 
 A defect found on the way, in test infrastructure rather than in the adapter:
 `alembic/env.py` calls `fileConfig(config.config_file_name)` with the default
@@ -1178,3 +1192,79 @@ fail-closed webhook warnings are invisible to the entire suite** — which is wh
 `test_an_unconfigured_endpoint_fails_closed` re-enables its own logger and says why.
 The fix is `disable_existing_loggers=False`, one line in `alembic/env.py`; not taken
 here because it is outside this phase's diff.
+
+### 8.10 What a live account changed
+
+`scripts/record_stripe_fixtures.py` re-records the fixtures from a real test-mode
+account. `tests/fixtures/stripe_issuing/README.md` says which files are recorded,
+which are derived from a recorded card by a stated mutation, and which are still
+authored from documentation.
+
+**Three bugs in the adapter, all of which documentation-derived fixtures could not
+have caught, and two of which would have broken the financial core.**
+
+1. **`spending_controls[spending_limits_currency]` cannot be sent for a card.** It is
+   on the card *object*, and it is a writable parameter on a *cardholder* — which is
+   how it got in. On a card, Stripe answers `400 Received unknown parameter`, because
+   it is derived from the card's own currency. The adapter sent it in both
+   `create_card` and `fund_card`, so **every spend-limited card creation and every
+   funding call would have failed.** This is the sharpest illustration of §8.2's point:
+   the field is genuinely in the published object, so no amount of careful reading
+   would have found it. Only a request would.
+2. **A US program requires card-issuing terms acceptance.** Without
+   `individual[card_issuing][user_terms_acceptance][ip]` and `[date]`, the cardholder
+   sits at `requirements.past_due` and **every `activate_card` fails.** Sandbox
+   placeholders now go in alongside the address ones, and `SANDBOX_TERMS_IP` carries
+   the caveat that this placeholder attests to something a person did — the one field
+   a real program would genuinely need `CreateCardholderRequest` to grow (§8.1).
+3. **`issuing_authorization.created` is also sent for a *declined* attempt**, with
+   `approved: false` and a reason in `request_history`. Mapping it to `AUTHORIZATION`
+   regardless put an amount in the ledger for money that was never held. A decline is
+   now `UNMAPPED` under `issuing_authorization.created:declined`. Not hypothetical: on
+   a program with no real-time authorization endpoint Stripe declines some attempts
+   with `cardholder_verification_required`, because it wants the issuer to decide
+   inside a two-second window and nobody is listening. `get_balance` already refused
+   to count an unapproved hold; this is the same fact on the event path.
+
+**Three assumptions confirmed**, each of which had been carrying a hedge:
+
+- **Metadata is merged, not replaced** (§8.3). The recording walk freezes a card with a
+  body containing no metadata and asserts the activation marker survives. It does.
+- **Webhook payloads really do expand nested objects** (§8.5). The recorded
+  `event_card_created` carries the whole cardholder — name, phone, postal address — so
+  collapsing expansions before `raw` reaches the ledger is load-bearing, not
+  theoretical.
+- **A reversal really does zero `amount`** and put the released figure in
+  `previous_attributes` (§8.7). The recorded `issuing_authorization.updated` has
+  `amount: 0` and `previous_attributes: {"amount": 500, ...}`, exactly as designed for.
+
+**And one thing still unverified:** the signature scheme (§8.2). An API key cannot
+settle how Stripe signs an outbound delivery.
+
+Three smaller facts worth keeping:
+
+- `request-id` is the header carrying Stripe's request id, as assumed.
+- This account's default API version is `2026-06-24.dahlia`, which spells a lapsed
+  authorization `reversed` and never `expired`. Mapping both is why leaving
+  `Stripe-Version` unpinned costs nothing (§8.7).
+- Stripe's own published example objects contain merchant categories that are **not in
+  their enum** — `hotels_motels_resorts` is rejected. Another reason a recorded fixture
+  outranks a documented one.
+
+**On funding a test-mode Issuing balance**, since the demo needs one and the answer is
+not where the docs suggest: `POST /v1/test_helpers/issuing/fund_balance` exists but is
+for funding-instruction (UK/EU) accounts and answers "A Funding Instruction is not
+currently supported for US". `POST /v1/topups` works with no source and accepts
+`destination_balance=issuing`, but the top-up stays `pending` in test mode. The
+Dashboard (Issuing → Balance → Add funds) credits instantly. With a zero balance every
+simulated authorization is declined `insufficient_funds` and cannot be captured, so the
+recorder treats an empty balance as a warning that skips the purchase walk and names
+the fixtures it left alone — a partial recording beats a recording of declines that
+looks like a recording of purchases.
+
+**Three bugs in the recorder itself**, kept here because the third is a trap worth not
+repeating: it sent the same bad `spending_limits_currency`; it omitted the same terms
+acceptance; and it **wrote fixtures from responses it had not asked for**, so an
+unexpected 400 replaced a good fixture with an error body — after which the suite would
+have passed against a recording of our own bug. `Recorder.call` now writes only when the
+status matches `expect`, and says out loud when it does not.

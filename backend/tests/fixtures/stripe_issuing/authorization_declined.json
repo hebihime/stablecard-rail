@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Invalid merchant_data[category]: must be one of ac_refrigeration_repair, accounting_bookkeeping_services, advertising_services, agricultural_coopera...rs, womens_accessory_and_specialty_shops, womens_ready_to_wear_stores, or wrecking_and_salvage_yards",
+    "param": "merchant_data[category]",
+    "request_log_url": "https://dashboard.stripe.com/acct_stablecard000001/test/workbench/logs?object=req_wTgzK4G9D5lL4B",
+    "type": "invalid_request_error"
+  }
+}

@@ -1,8 +1,8 @@
 {
   "error": {
-    "message": "You cannot update the status of a canceled card.",
+    "message": "Cards with status 'canceled' cannot be updated.",
     "param": "status",
-    "request_log_url": "https://dashboard.stripe.com/test/logs/req_stablecard0003",
+    "request_log_url": "https://dashboard.stripe.com/acct_stablecard000001/test/workbench/logs?object=req_jPxxDNocIqdd6X",
     "type": "invalid_request_error"
   }
 }

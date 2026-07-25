@@ -13,44 +13,71 @@
       }
     },
     "company": null,
-    "created": 1785000000,
+    "created": 1784979741,
     "email": "ada@example.test",
-    "id": "ich_1SbHolderStablecard01",
-    "individual": null,
+    "id": "ich_1Tx3yDJW5k9HL9eOe9VkBgGu",
+    "individual": {
+      "card_issuing": {
+        "user_terms_acceptance": {
+          "date": 1785000000,
+          "ip": "127.0.0.1",
+          "user_agent": null
+        }
+      },
+      "dob": null,
+      "first_name": "Ada",
+      "last_name": "Lovelace",
+      "verification": {
+        "document": {
+          "back": null,
+          "front": null
+        }
+      }
+    },
     "livemode": false,
-    "metadata": {},
+    "metadata": {
+      "stablecard_external_ref": "user-42",
+      "stablecard_run": "record_stripe_fixtures"
+    },
     "name": "Ada Lovelace",
     "object": "issuing.cardholder",
     "phone_number": "+15555550123",
+    "preferred_locales": [],
     "requirements": {
       "disabled_reason": null,
       "past_due": []
     },
     "spending_controls": {
-      "allowed_categories": null,
-      "blocked_categories": null,
+      "allowed_card_presences": [],
+      "allowed_categories": [],
+      "allowed_merchant_countries": [],
+      "blocked_card_presences": [],
+      "blocked_categories": [],
+      "blocked_merchant_countries": [],
       "spending_limits": [],
       "spending_limits_currency": null
     },
     "status": "active",
     "type": "individual"
   },
-  "created": 1785000060,
+  "created": 1784979742,
   "currency": "usd",
-  "cvc": null,
-  "exp_month": 8,
+  "exp_month": 5,
   "exp_year": 2029,
-  "id": "ic_1SbCardStablecard0001",
-  "last4": "4242",
+  "id": "ic_1Tx3yEJW5k9HL9eO7U5wEI8n",
+  "last4": "0088",
   "latest_fraud_warning": null,
   "lifecycle_controls": null,
   "livemode": false,
   "metadata": {
-    "stablecard_activated_at": "2026-07-25T18:00:00+00:00"
+    "stablecard_activated_at": "2026-07-25T18:00:00+00:00",
+    "stablecard_memo": "StableCard Rail fixture",
+    "stablecard_run": "record_stripe_fixtures"
   },
-  "number": null,
+  "migrate_tokens_from": null,
   "object": "issuing.card",
   "personalization_design": null,
+  "pin": null,
   "replaced_by": null,
   "replacement_for": null,
   "replacement_reason": null,
@@ -66,7 +93,7 @@
     "spending_limits": [
       {
         "amount": 100000,
-        "categories": null,
+        "categories": [],
         "interval": "all_time"
       }
     ],
@@ -76,12 +103,12 @@
   "type": "virtual",
   "wallets": {
     "apple_pay": {
-      "eligible": false,
-      "ineligible_reason": "missing_cardholder_contact"
+      "eligible": true,
+      "ineligible_reason": null
     },
     "google_pay": {
-      "eligible": false,
-      "ineligible_reason": "missing_cardholder_contact"
+      "eligible": true,
+      "ineligible_reason": null
     },
     "primary_account_identifier": null
   }

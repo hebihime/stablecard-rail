@@ -70,7 +70,7 @@
   "lifecycle_controls": null,
   "livemode": false,
   "metadata": {
-    "stablecard_activated_at": "2026-07-25T18:00:00+00:00",
+    "stablecard_activated_at": "2026-07-25T18:05:00+00:00",
     "stablecard_memo": "StableCard Rail fixture",
     "stablecard_run": "record_stripe_fixtures"
   },

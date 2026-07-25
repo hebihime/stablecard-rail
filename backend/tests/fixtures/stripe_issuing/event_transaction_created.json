@@ -1,6 +1,8 @@
 {
-  "data": [
-    {
+  "api_version": "2026-06-24.dahlia",
+  "created": 1784979752,
+  "data": {
+    "object": {
       "amount": -250,
       "amount_details": {
         "atm_fee": null,
@@ -41,8 +43,14 @@
       "type": "capture",
       "wallet": null
     }
-  ],
-  "has_more": true,
-  "object": "list",
-  "url": "/v1/issuing/transactions"
+  },
+  "id": "evt_1Tx3yOJW5k9HL9eOAQeBNQXp",
+  "livemode": false,
+  "object": "event",
+  "pending_webhooks": 0,
+  "request": {
+    "id": "req_H0V7EU2jIVK72k",
+    "idempotency_key": "cb4df95d-9c64-4a1f-8ba6-734c13dac026"
+  },
+  "type": "issuing_transaction.created"
 }

@@ -1,0 +1,12 @@
+{
+  "balance.available": 11,
+  "issuing_authorization.created": 16,
+  "issuing_authorization.updated": 13,
+  "issuing_card.created": 4,
+  "issuing_card.updated": 25,
+  "issuing_cardholder.created": 4,
+  "issuing_cardholder.updated": 5,
+  "issuing_transaction.created": 9,
+  "received_debit.created": 9,
+  "received_hold.amount_adjusted": 4
+}
