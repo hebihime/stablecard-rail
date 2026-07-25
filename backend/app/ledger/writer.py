@@ -10,22 +10,17 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import Money
+from app.core.time import require_utc, utcnow
 from app.ledger.models import LedgerEvent
 
 __all__ = ["find_by_idempotency_key", "record"]
-
-
-def _require_utc(moment: datetime) -> datetime:
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        raise ValueError("occurred_at must be timezone-aware UTC, got a naive datetime")
-    return moment.astimezone(UTC)
 
 
 async def record(
@@ -46,7 +41,7 @@ async def record(
     """Append one event. Flushes so the caller sees its `id`; does not commit."""
     event = LedgerEvent(
         event_type=event_type,
-        occurred_at=_require_utc(occurred_at) if occurred_at else datetime.now(UTC),
+        occurred_at=require_utc(occurred_at) if occurred_at else utcnow(),
         provider_id=provider_id,
         cardholder_id=cardholder_id,
         card_id=card_id,
