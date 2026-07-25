@@ -606,10 +606,14 @@ Two related decisions in the same place:
 
 Recorded here when their phase lands, per SPEC.md §11:
 
-- **Why CCTP cannot serve a Solana→BSC route**, and what that implies for
-  reconciliation — phase 6, with the bridge adapter.
-- **deBridge vs Wormhole**, chosen on which has a working Solana→BSC testnet route
-  at build time — phase 6.
+- **Why CCTP cannot serve a Solana→Gnosis Chain route**, and what that implies for
+  reconciliation — phase 6, with the bridge adapter. (SPEC.md §5.2 names Gnosis
+  Chain as the destination, because that is where a Gnosis Pay Safe lives.)
+- **deBridge vs Wormhole**, chosen on which has a working Solana→Gnosis Chain
+  testnet route at build time — phase 6. Gnosis Pay's own third-party-bridge page
+  lists deBridge for "Solana USDC → Gnosis", alongside NEAR Intents, Bungee, LiFi
+  and CoW Swap, so the mainnet route exists; whether a Chiado testnet route does is
+  the open question.
 - **`deposit_address → card` index** for the chain watcher, projected from the
   ledger's `card.created` events — phase 5 (see §3.4).
 - **Reconciler thresholds** for stuck intents — phase 5.

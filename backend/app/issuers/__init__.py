@@ -14,12 +14,12 @@ module needing to know which adapters exist.
 
 from __future__ import annotations
 
-from app.issuers.evm_deposit_mock import EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import GnosisPayMockAdapter
 from app.issuers.lithic import LithicAdapter
 from app.issuers.registry import register
 
 # --- the registry ----------------------------------------------------------
-register(EvmDepositMockAdapter.provider_id, EvmDepositMockAdapter.from_settings)
+register(GnosisPayMockAdapter.provider_id, GnosisPayMockAdapter.from_settings)
 # Registered whether or not LITHIC_API_KEY is set: the factory runs on first use, so
 # an environment with no Lithic credentials still starts, and only a call that needs
 # them fails (with a message naming the variable).

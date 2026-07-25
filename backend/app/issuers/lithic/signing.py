@@ -15,7 +15,7 @@ before parsing lands exactly right here.
 **The body is bytes and stays bytes.** `json.loads` then `json.dumps` produces
 different bytes for the same document, and would break every verification.
 
-This module deliberately shares no code with `evm_deposit_mock/signing.py`. Adapters
+This module deliberately shares no code with `gnosis_pay_mock/signing.py`. Adapters
 that reach into each other are how "adding an issuer is one adapter file" quietly
 becomes "one file, plus edits to whatever they share"
 (docs/ARCHITECTURE.md §4.2).

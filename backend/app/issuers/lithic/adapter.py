@@ -1,6 +1,6 @@
 """The Lithic adapter (SPEC.md §3.2) — translation, in both directions.
 
-A real `FIAT_RAIL` issuer, which is the half of the taxonomy `evm_deposit_mock`
+A real `FIAT_RAIL` issuer, which is the half of the taxonomy `gnosis_pay_mock`
 cannot exercise. Everything provider-shaped stops here: `client.py` speaks HTTP,
 `signing.py` verifies deliveries, and nothing above `issuers/base.py` learns that
 Lithic calls a cardholder an "account holder" or a card state `PAUSED`.
