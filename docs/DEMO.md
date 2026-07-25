@@ -1,10 +1,11 @@
 # Demo
 
 How to run the pipeline locally with free credentials only. Sections are added as
-phases land (SPEC.md §12); **phase 1** is what exists today.
+phases land (SPEC.md §12); **phases 1-3** are what exist today.
 
-Prerequisites: Docker (with Compose) and Python 3.12. No provider accounts, no
-testnet funds, and no secrets are needed for phases 1-2.
+Prerequisites: Docker (with Compose) and Python 3.12. Phases 1-2 need no provider
+account, no testnet funds and no secrets at all. Phase 3 needs a free Lithic sandbox
+key; nothing else in the service depends on it.
 
 ---
 
@@ -215,6 +216,90 @@ and the OTP service in phase 7 — so on a clean database there is nothing to dr
 
 ---
 
+## Phase 3 — the Lithic adapter
+
+A real `FIAT_RAIL` issuer, against Lithic's sandbox. Everything below makes real API
+calls; **the test suite never does** (SPEC.md §10).
+
+### Credentials
+
+Sign up at [lithic.com/signup](https://lithic.com/signup) — self-serve, free, no sales
+call. The sandbox key is issued with the account, at `app.lithic.com/settings`. Then:
+
+```bash
+# in .env (gitignored)
+LITHIC_API_BASE_URL=https://sandbox.lithic.com/v1
+LITHIC_API_KEY=<your sandbox key>
+```
+
+`LITHIC_WEBHOOK_SECRET` is optional and not needed for any of this: it only matters
+for accepting genuine inbound deliveries, which needs an event subscription pointing
+at a public URL. With it unset, `verify_webhook` fails closed and says why.
+
+Nothing else in the service depends on these. With no key at all, the mock provider
+and phases 1–2 work exactly as before — the adapter is registered by factory, so only
+a call that needs a key fails, and the error names the variable.
+
+### The whole thing in one command
+
+```bash
+docker compose up -d postgres redis
+cd backend && source .venv/bin/activate
+python scripts/demo_phase3.py
+```
+
+It creates a cardholder and a virtual card, freezes and unfreezes it, funds it twice
+under one `funding_ref`, reads the balance, simulates an authorization and its
+clearing, then takes the event payloads Lithic actually recorded for those calls and
+runs them through our own webhook pipeline into the ledger. It closes the card on the
+way out.
+
+Two things to watch for:
+
+- **the balance moves with the hold, not just the settlement.** A pending
+  authorization is money the cardholder cannot spend twice;
+- **the second `fund_card` call changes nothing.** It reports
+  `replayed=True` and the same `issuer_funding_ref`, because the funding ref is
+  recorded on the card itself (docs/ARCHITECTURE.md §4.5).
+
+### Over HTTP
+
+The same endpoints as phase 2, with `lithic` in place of `evm_deposit_mock`:
+
+```bash
+curl -s localhost:8000/providers | jq
+# [{"provider_id":"evm_deposit_mock","funding_model":"crypto_deposit"},
+#  {"provider_id":"lithic","funding_model":"fiat_rail"}]
+
+curl -s -X POST localhost:8000/providers/lithic/cardholders \
+  -H 'content-type: application/json' \
+  -d '{"email":"ada@example.test","first_name":"Ada","last_name":"Lovelace"}' | jq
+
+curl -s -X POST localhost:8000/providers/lithic/cardholders/<account_token>/cards \
+  -H 'content-type: application/json' \
+  -d '{"currency":"USD","spend_limit_minor":50000}' | jq
+```
+
+The card lifecycle, balance and webhook routes are unchanged and were not touched to
+add this provider. That is the claim phase 3 exists to test, and
+`backend/tests/test_module_boundaries.py` enforces it.
+
+### Re-recording the contract fixtures
+
+```bash
+python scripts/record_lithic_fixtures.py            # writes tests/fixtures/lithic/
+python scripts/record_lithic_fixtures.py --dry-run  # walk the API, write nothing
+```
+
+This is the only thing in the repo that calls Lithic outside the demo. It walks the
+sandbox with plain `httpx` and literal paths — deliberately not through the adapter,
+so the fixtures are evidence about the provider rather than a mirror of our own
+assumptions — and redacts PAN and CVV before writing. Re-run it when Lithic changes a
+payload: the diff is the change, and the contract tests either still pass or tell you
+what moved.
+
+---
+
 ## Running the backend on the host instead
 
 Useful for the test suite and for iterating without rebuilds.
@@ -230,13 +315,14 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 python scripts/demo_phase1.py
 python scripts/demo_phase2.py
+python scripts/demo_phase3.py     # needs LITHIC_API_KEY
 ```
 
 ## Tests
 
 ```bash
 cd backend
-pytest                                   # 558 tests
+pytest                                   # 733 tests
 pytest --cov --cov-report=term-missing   # coverage gate, SPEC.md §10
 ruff check . && ruff format --check . && mypy
 ```

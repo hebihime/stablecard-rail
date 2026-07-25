@@ -1,8 +1,8 @@
 {
-  "account_token": "6835fb31-fe8b-4694-a9d6-f3b951856378",
-  "created": "2026-07-25T06:16:49.571320",
-  "external_id": "stablecard-fixture-90a53a25",
+  "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+  "created": "2026-07-25T06:51:30.454219",
+  "external_id": "stablecard-fixture-a2f8a310",
   "status": "ACCEPTED",
   "status_reasons": [],
-  "token": "6d006315-fa84-4272-91e1-169af6241871"
+  "token": "5891e8a9-b17b-462a-bc0b-3f574c9c329d"
 }

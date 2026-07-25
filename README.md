@@ -28,7 +28,7 @@ pass, lint and types are clean, and the phase is demo-able.
 |---|---|---|
 | 1 | Skeleton + ledger + state machine | **done** |
 | 2 | Issuer abstraction + mock adapter + webhook receiver | **done** |
-| 3 | Lithic adapter | — |
+| 3 | Lithic adapter | **done** |
 | 4 | Stripe Issuing adapter | — |
 | 5 | Solana watcher + simulated bridge + auto top-up | — |
 | 6 | Real bridge adapter | — |
@@ -46,6 +46,9 @@ docker compose up --build      # postgres :5442, redis :6389, backend :8000
 curl -s localhost:8000/healthz
 docker compose exec backend python scripts/demo_phase1.py   # the state machine
 docker compose exec backend python scripts/demo_phase2.py   # issuers + webhooks
+
+# Phase 3 talks to Lithic's sandbox, so it needs a free sandbox key in .env
+cd backend && python scripts/demo_phase3.py                  # a real fiat-rail issuer
 ```
 
 Full walk-through — card lifecycle over HTTP, signed webhook deliveries, duplicate
@@ -58,7 +61,8 @@ append-only guarantee: [`docs/DEMO.md`](docs/DEMO.md).
 backend/app/
 ├── core/       config, engine + session factory, redis, logging, Money
 ├── funding/    FundingState + transition table, FundingIntent, machine.advance()
-├── issuers/    CardIssuerAdapter + normalized CardEvent, registry, evm_deposit_mock
+├── issuers/    CardIssuerAdapter + normalized CardEvent, registry,
+│               evm_deposit_mock (crypto deposit), lithic (fiat rail)
 ├── webhooks/   receiver (verify → dedup → parse → ledger → dispatch), EventBus,
 │               retry queue with backoff, dead-letter table
 ├── ledger/     append-only LedgerEvent, event-type constants, writer
@@ -79,6 +83,15 @@ backend/app/
   abstraction spans both `FIAT_RAIL` and `CRYPTO_DEPOSIT` providers. It ships a
   simulator that signs its own webhooks, so the whole pipeline runs offline with no
   account and no fixtures to re-record.
+- **`lithic`** is the first real provider, and phase 3's job was to find out where the
+  abstraction did not fit. It found one place: Lithic puts the event id in a
+  `webhook-id` header and sends `card.created` payloads with no timestamp at all, so
+  `parse_webhook(body)` could not build a `CardEvent`. The interface widened to
+  `parse_webhook(headers, body)`; `funding/`, `ledger/` and `api/` were untouched. Its
+  contract tests replay fixtures recorded from the sandbox by a script that talks to
+  Lithic with plain `httpx`, so the fixtures are evidence about the provider rather
+  than a mirror of our own assumptions — and the recorded card response contains a
+  PAN, which is why `Card.raw` is an allowlist and not a copy.
 - **The webhook receiver** authenticates before it records anything, deduplicates on
   a signature-covered event id (Redis first, the ledger's unique index as the durable
   backstop), and never drops an authentic delivery — one it cannot parse is recorded
@@ -89,9 +102,11 @@ backend/app/
   every card action, provider event and state transition.
 - **Money** is always integer minor units. Non-`int` amounts are rejected at
   construction; there is no float path anywhere in the codebase.
-- **Tests**: 558, against real Postgres and real Redis — all 121 ordered state pairs,
-  signature pass/fail per failure mode, duplicate and out-of-order deliveries,
-  idempotent `fund_card`, and a check that models have not drifted from migrations.
+- **Tests**: 733, against real Postgres and real Redis — all 121 ordered state pairs,
+  signature pass/fail per failure mode (including Lithic's own documented worked
+  example, so the scheme is pinned to a vector we did not compute), duplicate and
+  out-of-order deliveries, idempotent `fund_card`, and a check that models have not
+  drifted from migrations. No test calls a live provider API.
   Coverage on the four gated packages is 100% against SPEC.md §10's 60% floor.
 
 Directories for later phases are absent rather than empty — the tree shows exactly

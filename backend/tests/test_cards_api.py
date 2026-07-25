@@ -38,7 +38,11 @@ async def test_providers_are_listed_with_their_funding_model(client: httpx.Async
     # A client can pick a provider without knowing any adapter exists (SPEC.md §3.2).
     response = await client.get("/providers")
     assert response.status_code == 200
-    assert {"provider_id": PROVIDER, "funding_model": "crypto_deposit"} in response.json()
+    listed = response.json()
+    assert {"provider_id": PROVIDER, "funding_model": "crypto_deposit"} in listed
+    # Phase 3: both halves of the taxonomy are now real, and this endpoint gained
+    # the second one by a `register()` line — no change here or in `api/`.
+    assert {"provider_id": "lithic", "funding_model": "fiat_rail"} in listed
 
 
 # --------------------------------------------------------------- lifecycle ----

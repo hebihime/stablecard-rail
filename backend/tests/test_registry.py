@@ -82,6 +82,30 @@ def test_describe_exposes_the_funding_model_taxonomy() -> None:
     # importing any adapter (SPEC.md §3.2: proving both models are covered).
     described = dict(registry.describe())
     assert described["evm_deposit_mock"] is FundingModel.CRYPTO_DEPOSIT
+    assert described["lithic"] is FundingModel.FIAT_RAIL
+
+
+def test_the_lithic_adapter_is_registered_by_importing_the_package() -> None:
+    # The whole "adding an issuer is one adapter file plus one registry entry" claim,
+    # from the outside: the app imports `app.issuers` and both providers resolve.
+    assert "lithic" in registry.known_providers()
+
+
+def test_a_provider_with_no_credentials_configured_still_registers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Registration is by factory, so an environment without Lithic credentials boots
+    # and serves the mock provider; only a call that needs a key fails, and it names
+    # the variable (docs/ARCHITECTURE.md §3.1).
+    from app.core import config
+    from app.issuers.lithic import adapter as lithic_adapter
+
+    monkeypatch.setattr(lithic_adapter, "get_settings", lambda: config.Settings(lithic_api_key=""))
+    registry.reset_instances()
+
+    assert "lithic" in registry.known_providers()
+    with pytest.raises(ValueError, match="LITHIC_API_KEY"):
+        registry.get_adapter("lithic")
 
 
 def test_registrations_survive_an_instance_reset_but_instances_do_not() -> None:

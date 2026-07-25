@@ -217,7 +217,10 @@ async def walk(rec: Recorder) -> None:
         json_body={
             "spend_limit": 75_000,
             "spend_limit_duration": "FOREVER",
-            "memo": "StableCard Rail demo card [fund:fi_0001]",
+            # Exactly the shape the adapter writes: label plus the funding tag, which
+            # is where a Lithic funding keeps its idempotency record
+            # (docs/ARCHITECTURE.md §4.5).
+            "memo": "StableCard Rail demo card [fund:fi_0001:25000]",
         },
     )
 

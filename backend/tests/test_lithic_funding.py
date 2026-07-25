@@ -234,8 +234,28 @@ async def test_funding_a_closed_card_is_refused_before_it_is_attempted(
     patched = mock_patch(fixture("card_closed"))
 
     with pytest.raises(FundingRejectedError, match="canceled"):
-        await adapter.fund_card(CARD_TOKEN, Money(25_000, "USD"), "fi_0001")
+        await adapter.fund_card(CARD_TOKEN, Money(10_000, "USD"), "fi_new")
 
+    assert 0 == patched.call_count
+
+
+@respx.mock
+async def test_a_replay_still_reports_the_funding_that_did_happen(
+    adapter: LithicAdapter,
+) -> None:
+    # A card funded and then closed: the funding is a fact, and a retry of it must
+    # report that fact rather than "card is canceled". The recorded `card_closed`
+    # fixture still carries the tag from when it was funded, which is what makes this
+    # case real rather than hypothetical.
+    closed = fixture("card_closed")
+    assert "[fund:fi_0001:25000]" in closed["memo"], "the recording must show this"
+    mock_card(closed)
+    patched = mock_patch(closed)
+
+    result = await adapter.fund_card(CARD_TOKEN, Money(25_000, "USD"), "fi_0001")
+
+    assert FundingStatus.SUCCEEDED is result.status
+    assert result.raw["replayed"] is True
     assert 0 == patched.call_count
 
 

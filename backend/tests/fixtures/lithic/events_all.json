@@ -1,6 +1,1082 @@
 {
   "data": [
     {
+      "created": "2026-07-25T06:52:03.860Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": -250,
+        "amounts": {
+          "cardholder": {
+            "amount": 250,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 250,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 250,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 0,
+        "authorization_code": null,
+        "avs": null,
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:52:03Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": -250,
+            "amounts": {
+              "cardholder": {
+                "amount": 0,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 0,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 250,
+                "currency": "USD"
+              },
+              "settlement": {
+                "amount": 250,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              }
+            },
+            "created": "2026-07-25T06:52:03Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "CREDIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025PFNXEJNG"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "995021515765966"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "0c86acb1-5b63-45d8-b24f-30582884b558",
+            "type": "RETURN"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "927532914359234",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "REFUND SHOP",
+          "mcc": "2919",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": -250,
+        "merchant_authorization_amount": 0,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": -250,
+        "status": "SETTLED",
+        "tags": {},
+        "token": "23d8ae1b-c624-4ab6-a7be-c71ebefd6206",
+        "token_info": null,
+        "updated": "2026-07-25T06:52:03Z"
+      },
+      "token": "msg_3Gz70vKiNOns3AMsLGM1EXQapaR"
+    },
+    {
+      "created": "2026-07-25T06:52:00.140Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 0,
+        "amounts": {
+          "cardholder": {
+            "amount": 0,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 0,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 0,
+        "authorization_code": "3D3C44",
+        "avs": null,
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:51:42Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 500,
+            "amounts": {
+              "cardholder": {
+                "amount": 500,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:51:42Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025QJLSTZAC"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "524266076790655"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "6f4bdaca-2f98-472b-9753-8005e66bffc9",
+            "type": "AUTHORIZATION"
+          },
+          {
+            "account_type": null,
+            "amount": -500,
+            "amounts": {
+              "cardholder": {
+                "amount": 500,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:51:45Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "CREDIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025ZODRFVZE"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "524266076790655"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "162e1a60-ebb8-41b0-ba63-71f1c6b4b09b",
+            "type": "AUTHORIZATION_REVERSAL"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "VOID ME",
+          "mcc": "8220",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 0,
+        "merchant_authorization_amount": 0,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 0,
+        "status": "VOIDED",
+        "tags": {},
+        "token": "fcb307e0-78d1-43b9-9586-d1fefd262521",
+        "token_info": null,
+        "updated": "2026-07-25T06:51:59Z"
+      },
+      "token": "msg_3Gz70SU2biCgV24QDdnVZNx6Gad"
+    },
+    {
+      "created": "2026-07-25T06:51:42.848Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 500,
+        "amounts": {
+          "cardholder": {
+            "amount": 0,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": -500,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 0,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 500,
+        "authorization_code": "3D3C44",
+        "avs": null,
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:51:42Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 500,
+            "amounts": {
+              "cardholder": {
+                "amount": 500,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:51:42Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025QJLSTZAC"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "524266076790655"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "6f4bdaca-2f98-472b-9753-8005e66bffc9",
+            "type": "AUTHORIZATION"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "VOID ME",
+          "mcc": "8220",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 500,
+        "merchant_authorization_amount": 500,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 0,
+        "status": "PENDING",
+        "tags": {},
+        "token": "fcb307e0-78d1-43b9-9586-d1fefd262521",
+        "token_info": null,
+        "updated": "2026-07-25T06:51:42Z"
+      },
+      "token": "msg_3Gz6yHdDzT7Cm1dIIBA9YAaREJ5"
+    },
+    {
+      "created": "2026-07-25T06:51:41.444Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 1234,
+        "amounts": {
+          "cardholder": {
+            "amount": -1234,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": -1234,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": -1234,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 1234,
+        "authorization_code": "608149",
+        "avs": null,
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:51:36Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:51:36Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025ENLAFYWW"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "714842737423938"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "cca27dea-992f-4ad3-8bd7-9dc23f514877",
+            "type": "AUTHORIZATION"
+          },
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              }
+            },
+            "created": "2026-07-25T06:51:40Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025CDHTKAFG"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "714842737423938"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "b05f7ef5-c1f1-46dc-9ac6-b0882c117bd1",
+            "type": "CLEARING"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "COFFEE BAR",
+          "mcc": "8933",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 1234,
+        "merchant_authorization_amount": 1234,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 1234,
+        "status": "SETTLED",
+        "tags": {},
+        "token": "34fdd413-ae60-4f75-a08b-38d2085a5db6",
+        "token_info": null,
+        "updated": "2026-07-25T06:51:40Z"
+      },
+      "token": "msg_3Gz6y6mGYr3oPhtRyRTOrNkIych"
+    },
+    {
+      "created": "2026-07-25T06:51:37.208Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 1234,
+        "amounts": {
+          "cardholder": {
+            "amount": 0,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": -1234,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 0,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 1234,
+        "authorization_code": "608149",
+        "avs": null,
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:51:36Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:51:36Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025ENLAFYWW"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "714842737423938"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "cca27dea-992f-4ad3-8bd7-9dc23f514877",
+            "type": "AUTHORIZATION"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "COFFEE BAR",
+          "mcc": "8933",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 1234,
+        "merchant_authorization_amount": 1234,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 0,
+        "status": "PENDING",
+        "tags": {},
+        "token": "34fdd413-ae60-4f75-a08b-38d2085a5db6",
+        "token_info": null,
+        "updated": "2026-07-25T06:51:36Z"
+      },
+      "token": "msg_3Gz6xZof5JTdiieF66rMzypquml"
+    },
+    {
+      "created": "2026-07-25T06:51:31.920Z",
+      "event_type": "card.created",
+      "payload": {
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "event_type": "card.created",
+        "replacement_for": null
+      },
+      "token": "msg_3Gz6wuTptiXMELZ9c5zPTZ2Neu7"
+    },
+    {
+      "created": "2026-07-25T06:51:31.116Z",
+      "event_type": "card.created",
+      "payload": {
+        "card_token": "fb2db5e4-1f7b-42ee-be32-5620481936d1",
+        "event_type": "card.created",
+        "replacement_for": null
+      },
+      "token": "msg_3Gz6woNW9fw3n1hEqMDgK3odEgJ"
+    },
+    {
+      "created": "2026-07-25T06:51:30.668Z",
+      "event_type": "account_holder.created",
+      "payload": {
+        "account_token": "47d1fa87-b69b-4399-9ea9-6760779dc468",
+        "created": "2026-07-25 06:51:30.454219",
+        "event_type": "account_holder.created",
+        "status": "ACCEPTED",
+        "status_reason": [],
+        "token": "5891e8a9-b17b-462a-bc0b-3f574c9c329d"
+      },
+      "token": "msg_3Gz6wklx3PPEPeb93G3gorUDeCV"
+    },
+    {
+      "created": "2026-07-25T06:51:01.484Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "60310e5d-d094-4f9b-9b61-84fa203c0a05",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 1234,
+        "amounts": {
+          "cardholder": {
+            "amount": -1234,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": -1234,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": -1234,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 1234,
+        "authorization_code": "798E7A",
+        "avs": null,
+        "card_token": "a2e5df8f-613d-4319-a06b-62b20803924e",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:50:56Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:50:56Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025ARUYOPVI"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "622110411048765"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "844154c1-53d3-485a-9222-644475c9b96a",
+            "type": "AUTHORIZATION"
+          },
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              }
+            },
+            "created": "2026-07-25T06:51:00Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025PPFHUGNA"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "622110411048765"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "8d1cef2d-328d-4e3a-85dc-4c0dbd56a289",
+            "type": "CLEARING"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "COFFEE BAR",
+          "mcc": "3005",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 1234,
+        "merchant_authorization_amount": 1234,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 1234,
+        "status": "SETTLED",
+        "tags": {},
+        "token": "b5d999d9-79b4-4482-b453-39ac80edb884",
+        "token_info": null,
+        "updated": "2026-07-25T06:51:01Z"
+      },
+      "token": "msg_3Gz6t5Qx0h9DWrBHBVS8NDS454p"
+    },
+    {
+      "created": "2026-07-25T06:50:57.668Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "60310e5d-d094-4f9b-9b61-84fa203c0a05",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 1234,
+        "amounts": {
+          "cardholder": {
+            "amount": 0,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": -1234,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 0,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 1234,
+        "authorization_code": "798E7A",
+        "avs": null,
+        "card_token": "a2e5df8f-613d-4319-a06b-62b20803924e",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:50:56Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": null,
+            "amount": 1234,
+            "amounts": {
+              "cardholder": {
+                "amount": 1234,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 1234,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:50:56Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025ARUYOPVI"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "622110411048765"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "844154c1-53d3-485a-9222-644475c9b96a",
+            "type": "AUTHORIZATION"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "COFFEE BAR",
+          "mcc": "3005",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 1234,
+        "merchant_authorization_amount": 1234,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 0,
+        "status": "PENDING",
+        "tags": {},
+        "token": "b5d999d9-79b4-4482-b453-39ac80edb884",
+        "token_info": null,
+        "updated": "2026-07-25T06:50:57Z"
+      },
+      "token": "msg_3Gz6sbeheZT5weU9CshvvtDivz5"
+    },
+    {
+      "created": "2026-07-25T06:50:44.496Z",
+      "event_type": "card.created",
+      "payload": {
+        "card_token": "a2e5df8f-613d-4319-a06b-62b20803924e",
+        "event_type": "card.created",
+        "replacement_for": null
+      },
+      "token": "msg_3Gz6qx4Pp0A1dnKP0L277h50W9X"
+    },
+    {
+      "created": "2026-07-25T06:50:43.504Z",
+      "event_type": "account_holder.created",
+      "payload": {
+        "account_token": "60310e5d-d094-4f9b-9b61-84fa203c0a05",
+        "created": "2026-07-25 06:50:43.310009",
+        "event_type": "account_holder.created",
+        "status": "ACCEPTED",
+        "status_reason": [],
+        "token": "a9a36670-521f-4d73-b55a-d12a3e0f6b28"
+      },
+      "token": "msg_3Gz6qpL5DaFe7E39cLP2EickhDz"
+    },
+    {
       "created": "2026-07-25T06:17:41.316Z",
       "event_type": "card_transaction.updated",
       "payload": {
@@ -255,6 +1331,174 @@
         "updated": "2026-07-25T06:17:36Z"
       },
       "token": "msg_3Gz2pDpy9LwAEh2k2SHMMeBtyZT"
+    },
+    {
+      "created": "2026-07-25T06:17:36.464Z",
+      "event_type": "card_transaction.updated",
+      "payload": {
+        "account_token": "6835fb31-fe8b-4694-a9d6-f3b951856378",
+        "acquirer_fee": 0,
+        "acquirer_reference_number": null,
+        "amount": 0,
+        "amounts": {
+          "cardholder": {
+            "amount": 0,
+            "conversion_rate": "1.000000",
+            "currency": "USD"
+          },
+          "hold": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "merchant": {
+            "amount": 0,
+            "currency": "USD"
+          },
+          "settlement": {
+            "amount": 0,
+            "currency": "USD"
+          }
+        },
+        "authorization_amount": 0,
+        "authorization_code": "7BE052",
+        "avs": null,
+        "card_token": "bc2d875e-a9f4-4222-8565-a35d9701cb0e",
+        "cardholder_authentication": null,
+        "created": "2026-07-25T06:16:58Z",
+        "event_type": "card_transaction.updated",
+        "events": [
+          {
+            "account_type": "DEFAULT",
+            "amount": 500,
+            "amounts": {
+              "cardholder": {
+                "amount": 500,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:16:58Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "DEBIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025APJFCHZF"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "586330963098839"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "342049cd-8452-4d52-8211-a9b8d589069a",
+            "type": "AUTHORIZATION"
+          },
+          {
+            "account_type": null,
+            "amount": -500,
+            "amounts": {
+              "cardholder": {
+                "amount": 500,
+                "conversion_rate": "1.000000",
+                "currency": "USD"
+              },
+              "hold": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "merchant": {
+                "amount": 500,
+                "currency": "USD"
+              },
+              "settlement": null
+            },
+            "created": "2026-07-25T06:17:01Z",
+            "detailed_results": [
+              "APPROVED"
+            ],
+            "effective_polarity": "CREDIT",
+            "network_info": {
+              "acquirer": {
+                "acquirer_reference_number": null,
+                "retrieval_reference_number": "6025SDCPGQWC"
+              },
+              "amex": null,
+              "mastercard": null,
+              "visa": {
+                "original_transaction_id": null,
+                "transaction_id": "586330963098839"
+              }
+            },
+            "network_specific_data": null,
+            "result": "APPROVED",
+            "rule_results": [],
+            "token": "0c4784e8-8af0-43f6-9105-22a5b393a697",
+            "type": "AUTHORIZATION_REVERSAL"
+          }
+        ],
+        "family": "CARD",
+        "financial_account_token": "8f1df5de-a34b-5f6e-b81f-7740dc182743",
+        "merchant": {
+          "acceptor_id": "OODKZAPJVN4YS7O",
+          "acquiring_institution_id": "",
+          "city": "NEW YORK",
+          "country": "USA",
+          "descriptor": "VOID ME",
+          "mcc": "6010",
+          "phone_number": null,
+          "postal_code": null,
+          "state": "NY",
+          "street_address": null
+        },
+        "merchant_amount": 0,
+        "merchant_authorization_amount": 0,
+        "merchant_currency": "USD",
+        "network": "VISA",
+        "network_risk_score": null,
+        "pos": {
+          "entry_mode": {
+            "card": "UNKNOWN",
+            "cardholder": "UNKNOWN",
+            "pan": "4111111111111111",
+            "pin_entered": false
+          },
+          "terminal": {
+            "acceptor_terminal_id": null,
+            "attended": false,
+            "card_retention_capable": false,
+            "on_premise": true,
+            "operator": "UNKNOWN",
+            "partial_approval_capable": false,
+            "pin_capability": "UNSPECIFIED",
+            "type": "PHONE"
+          }
+        },
+        "result": "APPROVED",
+        "service_location": null,
+        "settled_amount": 0,
+        "status": "VOIDED",
+        "tags": {},
+        "token": "82d9e0c8-cddd-4eba-a231-8e41bfae0947",
+        "token_info": null,
+        "updated": "2026-07-25T06:17:36Z"
+      },
+      "token": "msg_3Gz2p7Zlh0c6HUPLJiLkGPYak5n"
     },
     {
       "created": "2026-07-25T06:16:58.900Z",

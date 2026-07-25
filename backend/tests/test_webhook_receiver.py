@@ -17,6 +17,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from redis.asyncio import Redis
@@ -34,6 +35,9 @@ from app.issuers.evm_deposit_mock.signing import (
     TIMESTAMP_HEADER,
     sign,
 )
+from app.issuers.lithic import LithicAdapter
+from app.issuers.lithic import signing as lithic_signing
+from app.issuers.lithic.client import LithicClient
 from app.webhooks import dispatch
 from app.webhooks.bus import RedisStreamsEventBus
 from app.webhooks.dedup import dedup_key, ledger_idempotency_key
@@ -486,3 +490,99 @@ async def test_events_for_one_card_read_back_as_a_history(
         "provider.authorization_reversal",
     ]
     assert {event.card_id for event in events} == {card_id}
+
+
+# ----------------------------------------------- a second, real provider ----
+
+
+LITHIC_SECRET = "whsec_cGhhc2UtMy10ZXN0LWtleS1tYXRlcmlhbC0zMmJ5dGU="
+LITHIC_FIXTURES = Path(__file__).parent / "fixtures" / "lithic"
+
+
+@pytest.fixture
+def lithic(clock: Clock) -> Iterator[LithicAdapter]:
+    """The real Lithic adapter, on the same controlled clock, in the registry."""
+    built = LithicAdapter(
+        client=LithicClient(base_url="https://sandbox.lithic.test/v1", api_key="k", timeout=5.0),
+        webhook_secret=LITHIC_SECRET,
+        clock=clock,
+    )
+    registry.register(built.provider_id, lambda: built, replace=True)
+    yield built
+
+
+def lithic_delivery(clock: Clock, *, event_id: str) -> tuple[dict[str, str], bytes]:
+    """A recorded settlement payload, signed the way Lithic signs one."""
+    events = json.loads((LITHIC_FIXTURES / "events_all.json").read_text())["data"]
+    payload = next(
+        event["payload"]
+        for event in events
+        if event["payload"].get("event_type") == "card_transaction.updated"
+        and event["payload"]["status"] == "SETTLED"
+        and [entry["type"] for entry in event["payload"]["events"]] == ["AUTHORIZATION", "CLEARING"]
+    )
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    timestamp = str(int(clock.now.timestamp()))
+    return {
+        lithic_signing.WEBHOOK_ID_HEADER: event_id,
+        lithic_signing.TIMESTAMP_HEADER: timestamp,
+        lithic_signing.SIGNATURE_HEADER: lithic_signing.sign(
+            LITHIC_SECRET, webhook_id=event_id, timestamp=timestamp, body=body
+        ),
+    }, body
+
+
+async def test_a_real_providers_delivery_runs_the_same_pipeline(
+    session: AsyncSession, redis_client: Redis, lithic: LithicAdapter, clock: Clock
+) -> None:
+    # The point of phase 3, stated as a test: a second provider — a real one, with its
+    # own signature scheme, its own event vocabulary and an id that lives in a header —
+    # reaches the ledger through code that knows nothing about it. Nothing in
+    # `webhooks/` changed to make this pass.
+    headers, body = lithic_delivery(clock, event_id="msg_settled_once")
+
+    outcome = await receive(session, redis_client, provider_id="lithic", headers=headers, body=body)
+
+    assert outcome.duplicate is False
+    assert outcome.event_type is CardEventType.SETTLEMENT
+    assert "msg_settled_once" == outcome.event_id
+
+    recorded = (await all_ledger_events(session))[0]
+    assert "provider.settlement" == recorded.event_type
+    assert "lithic" == recorded.provider_id
+    assert 1_234 == recorded.amount_minor
+    assert "USD" == recorded.currency
+    assert json.loads(body)["card_token"] == recorded.card_id
+    # Deduped on the header id, which the signature covers.
+    assert ledger_idempotency_key("lithic", "msg_settled_once") == recorded.idempotency_key
+    assert "card_transaction.updated:CLEARING" == recorded.payload["provider_event_type"]
+
+
+async def test_a_redelivered_lithic_event_is_a_duplicate(
+    session: AsyncSession, redis_client: Redis, lithic: LithicAdapter, clock: Clock
+) -> None:
+    # Lithic retries on any non-2xx, up to eight times over 24 hours, keeping the same
+    # `webhook-id`. That is exactly the dedup key.
+    headers, body = lithic_delivery(clock, event_id="msg_retried")
+
+    first = await receive(session, redis_client, provider_id="lithic", headers=headers, body=body)
+    second = await receive(session, redis_client, provider_id="lithic", headers=headers, body=body)
+
+    assert (False, True) == (first.duplicate, second.duplicate)
+    assert 1 == len(await all_ledger_events(session))
+    assert second.ledger_event_id == first.ledger_event_id
+
+
+async def test_a_forged_lithic_delivery_leaves_no_trace(
+    session: AsyncSession, redis_client: Redis, lithic: LithicAdapter, clock: Clock
+) -> None:
+    headers, body = lithic_delivery(clock, event_id="msg_forged")
+    # Same body, re-labelled with a fresh id to get past the dedup gate. The id is
+    # inside the signed content, so the signature no longer matches.
+    headers[lithic_signing.WEBHOOK_ID_HEADER] = "msg_attacker_chosen"
+
+    with pytest.raises(SignatureRejected):
+        await receive(session, redis_client, provider_id="lithic", headers=headers, body=body)
+
+    assert [] == await all_ledger_events(session)
+    assert [] == await redis_client.keys("*")
