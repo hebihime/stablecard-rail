@@ -52,14 +52,33 @@ from app.issuers.stripe_issuing.adapter import (
 from app.issuers.stripe_issuing.client import StripeClient
 
 BASE_URL = "https://api.stripe.test/v1"
-CARD_ID = "ic_1SbCardStablecard0001"
-FUNDING_REF = "intent-1"
 
 FIXTURES = Path(__file__).parent / "fixtures" / "stripe_issuing"
 
 
 def fixture(name: str) -> Any:
     return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+#: Derived from the recorded fixtures, so a re-record cannot break these on ids.
+CARD_ID: str = fixture("card_funded")["id"]
+#: The ref the recorded `card_funded` actually carries in its metadata.
+FUNDING_REF: str = fixture("card_funded")["metadata"][FUNDING_REF_KEY]
+
+#: The numbers `get_balance` has to add up, read off the recorded fixtures so that
+#: re-recording with different amounts cannot silently invert an assertion.
+LIMIT: int = fixture("card_with_limit")["spending_controls"]["spending_limits"][0]["amount"]
+#: Stripe signs these: a capture is negative, a refund positive.
+SETTLED: int = sum(
+    entry["amount"]
+    for page in ("transactions_page_1", "transactions_page_2")
+    for entry in fixture(page)["data"]
+)
+PAGE_2_TOTAL: int = sum(entry["amount"] for entry in fixture("transactions_page_2")["data"])
+#: Only an approved pending authorization holds anything.
+HELD: int = sum(
+    entry["amount"] for entry in fixture("authorizations_pending")["data"] if entry["approved"]
+)
 
 
 async def no_sleep(seconds: float) -> None:
@@ -109,7 +128,11 @@ async def test_funding_raises_the_all_time_limit_by_the_amount(
     assert sent["spending_controls[spending_limits][0][amount]"] == "102500"
     # Restated every time: a limit on any other interval is not a balance.
     assert sent["spending_controls[spending_limits][0][interval]"] == ALL_TIME
-    assert sent["spending_controls[spending_limits_currency]"] == "usd"
+    # Read-only on the card object, and a 400 if sent — see the same assertion in
+    # test_stripe_adapter.py. This one matters more: it is on the funding path, so
+    # sending it meant *every* `fund_card` call would have failed against the real API
+    # (docs/ARCHITECTURE.md §8.10).
+    assert "spending_controls[spending_limits_currency]" not in sent
 
     assert result.provider_id == PROVIDER_ID
     assert result.card_id == CARD_ID
@@ -301,8 +324,11 @@ async def test_funding_a_canceled_card_is_refused(adapter: StripeIssuingAdapter)
     reads("card_canceled")
     route = respx.post(f"{BASE_URL}/issuing/cards/{CARD_ID}")
 
+    # A ref the card has *not* seen: the recorded canceled card still carries the
+    # funding it was given before cancellation, and a replay answers before any state
+    # guard is consulted (which is correct — a replay reports what already happened).
     with pytest.raises(FundingRejectedError, match="canceled"):
-        await adapter.fund_card(CARD_ID, Money(2500, "USD"), FUNDING_REF)
+        await adapter.fund_card(CARD_ID, Money(2500, "USD"), "intent-after-cancel")
 
     assert route.call_count == 0
 
@@ -403,8 +429,7 @@ async def test_the_balance_is_the_limit_less_what_is_spent_and_held(
     transactions("transactions_page_1", "transactions_page_2")
     authorizations("authorizations_pending")
 
-    # 100_000 limit + 250 refund - 1_234 capture - 500 capture - 3_000 held.
-    assert await adapter.get_balance(CARD_ID) == Money(95_516, "USD")
+    assert await adapter.get_balance(CARD_ID) == Money(LIMIT + SETTLED - HELD, "USD")
 
 
 @respx.mock
@@ -418,7 +443,8 @@ async def test_the_balance_reads_every_page(adapter: StripeIssuingAdapter) -> No
     await adapter.get_balance(CARD_ID)
 
     assert route.call_count == 2
-    assert route.calls[1].request.url.params["starting_after"] == "ipi_1SbTxnStablecard0001"
+    last_on_page_1 = fixture("transactions_page_1")["data"][-1]["id"]
+    assert route.calls[1].request.url.params["starting_after"] == last_on_page_1
 
 
 @respx.mock
@@ -453,7 +479,7 @@ async def test_an_unapproved_pending_authorization_holds_nothing(
         return_value=httpx.Response(200, json=payload)
     )
 
-    assert await adapter.get_balance(CARD_ID) == Money(99_500, "USD")
+    assert await adapter.get_balance(CARD_ID) == Money(LIMIT + PAGE_2_TOTAL, "USD")
 
 
 @respx.mock
@@ -480,7 +506,7 @@ async def test_a_transaction_with_a_non_integer_amount_fails_loudly(
     )
     authorizations("authorizations_none")
 
-    with pytest.raises(IssuerError, match="ipi_1SbTxnStablecard0000"):
+    with pytest.raises(IssuerError, match=fixture("transactions_page_2")["data"][0]["id"]):
         await adapter.get_balance(CARD_ID)
 
 
@@ -496,7 +522,7 @@ async def test_an_authorization_with_a_non_integer_amount_fails_loudly(
         return_value=httpx.Response(200, json=payload)
     )
 
-    with pytest.raises(IssuerError, match="iauth_1SbAuthStablecard003"):
+    with pytest.raises(IssuerError, match=fixture("authorizations_pending")["data"][0]["id"]):
         await adapter.get_balance(CARD_ID)
 
 
@@ -512,4 +538,4 @@ async def test_the_balance_is_denominated_in_the_cards_currency(
     balance = await adapter.get_balance(CARD_ID)
 
     assert balance.currency == "USD"
-    assert balance.amount_minor == 99_500
+    assert balance.amount_minor == LIMIT + PAGE_2_TOTAL

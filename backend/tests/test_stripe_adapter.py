@@ -54,20 +54,30 @@ from app.issuers.stripe_issuing.adapter import (
     CARD_STATUSES,
     PROVIDER_ID,
     SANDBOX_ADDRESS,
+    SANDBOX_TERMS_IP,
     StripeIssuingAdapter,
 )
 from app.issuers.stripe_issuing.client import StripeApiError, StripeClient
 
 BASE_URL = "https://api.stripe.test/v1"
 API_KEY = "sk_test_not_a_real_credential_0001"
-CARD_ID = "ic_1SbCardStablecard0001"
-HOLDER_ID = "ich_1SbHolderStablecard01"
 
 FIXTURES = Path(__file__).parent / "fixtures" / "stripe_issuing"
 
 
 def fixture(name: str) -> Any:
     return json.loads((FIXTURES / f"{name}.json").read_text())
+
+
+#: Read out of the recorded fixtures rather than written down, so re-running
+#: `scripts/record_stripe_fixtures.py` cannot break these tests on the ids alone.
+#: Stripe's ids are opaque to us anyway (SPEC.md §1), so the literal never mattered.
+CARD_ID: str = fixture("card_created")["id"]
+HOLDER_ID: str = fixture("card_created")["cardholder"]["id"]
+
+
+def utc(unix: int) -> datetime:
+    return datetime.fromtimestamp(unix, tz=UTC)
 
 
 async def no_sleep(seconds: float) -> None:
@@ -133,6 +143,13 @@ async def test_creating_a_cardholder_sends_the_identity_stripe_requires(
     # Required before a card of theirs can ever be activated.
     assert sent["individual[first_name]"] == "Ada"
     assert sent["individual[last_name]"] == "Lovelace"
+    # So is card-issuing terms acceptance, on a US program. Without these two the
+    # cardholder sits at `requirements.past_due` and *every* `activate_card` fails
+    # with "This cardholder has outstanding requirements preventing them from
+    # activating an issued card" — which a live account said and no published example
+    # object shows (docs/ARCHITECTURE.md §8.10).
+    assert sent["individual[card_issuing][user_terms_acceptance][ip]"] == SANDBOX_TERMS_IP
+    assert int(sent["individual[card_issuing][user_terms_acceptance][date]"]) > 0
     # A billing address is required and `CreateCardholderRequest` does not carry
     # one, so the placeholder lives in the adapter rather than in the DTO.
     assert sent["billing[address][line1]"] == SANDBOX_ADDRESS["line1"]
@@ -145,7 +162,28 @@ async def test_creating_a_cardholder_sends_the_identity_stripe_requires(
     assert holder.provider_id == PROVIDER_ID
     assert holder.cardholder_id == HOLDER_ID
     assert holder.email == "ada@example.test"
-    assert holder.created_at == datetime(2026, 7, 25, 17, 20, tzinfo=UTC)
+    assert holder.created_at == utc(fixture("cardholder_created")["created"])
+
+
+@respx.mock
+async def test_the_terms_acceptance_timestamp_is_the_adapters_clock(
+    adapter: StripeIssuingAdapter,
+) -> None:
+    # Stripe wants a Unix timestamp, and it is meant to be when the user accepted.
+    # A sandbox program has no such moment, so "now" is the honest placeholder — and
+    # a real program must pass the user's own IP and timestamp, which is the one place
+    # `CreateCardholderRequest` would genuinely have to grow (§8.1).
+    route = respx.post(f"{BASE_URL}/issuing/cardholders").mock(
+        return_value=httpx.Response(200, json=fixture("cardholder_created"))
+    )
+
+    await adapter.create_cardholder(
+        CreateCardholderRequest(email="a@b.test", first_name="Ada", last_name="Lovelace")
+    )
+
+    sent = sent_form(route.calls.last.request)
+    accepted_at = int(sent["individual[card_issuing][user_terms_acceptance][date]"])
+    assert accepted_at == int(datetime(2026, 7, 25, 18, 0, tzinfo=UTC).timestamp())
 
 
 @respx.mock
@@ -281,13 +319,16 @@ async def test_a_created_card_is_inactive_and_reports_itself_unactivated(
     assert card.cardholder_id == HOLDER_ID
     assert card.state is CardState.UNACTIVATED
     assert card.currency == "USD"
-    assert card.last_four == "4242"
-    assert card.exp_month == 8
-    assert card.exp_year == 2029
-    assert card.spend_limit_minor is None
+    recorded = fixture("card_created")
+    assert card.last_four == recorded["last4"]
+    assert card.exp_month == recorded["exp_month"]
+    assert card.exp_year == recorded["exp_year"]
+    # The recorder creates the card already limited, so this is its limit rather than
+    # `None`; the no-limit case has its own test below.
+    assert card.spend_limit_minor == recorded["spending_controls"]["spending_limits"][0]["amount"]
     # A fiat rail has no deposit address to hand out (SPEC.md §3.2).
     assert card.deposit_address is None
-    assert card.created_at == datetime(2026, 7, 25, 17, 21, tzinfo=UTC)
+    assert card.created_at == utc(fixture("card_created")["created"])
 
 
 @respx.mock
@@ -307,7 +348,13 @@ async def test_a_spend_limit_becomes_an_all_time_control(
     sent = sent_form(route.calls.last.request)
     assert sent["spending_controls[spending_limits][0][amount]"] == "100000"
     assert sent["spending_controls[spending_limits][0][interval]"] == "all_time"
-    assert sent["spending_controls[spending_limits_currency]"] == "usd"
+    # NOT sent, though it is on the response object: `spending_limits_currency` is
+    # read-only, derived from the card's own currency, and Stripe answers 400
+    # "Received unknown parameter" if you try to set it. Found by recording against a
+    # live account, after the phase shipped sending it (docs/ARCHITECTURE.md §8.10) —
+    # which is precisely the class of mistake documentation-derived fixtures cannot
+    # catch, since the field really is in the published card object.
+    assert "spending_controls[spending_limits_currency]" not in sent
     assert card.spend_limit_minor == 100_000
 
 
@@ -386,7 +433,7 @@ async def test_a_card_response_never_carries_pan_or_cvc_into_the_ledger(
     # embeds the whole cardholder. `raw` is an allowlist for both reasons.
     payload = fixture("card_created")
     payload["number"] = "4242424242424242"
-    payload["cvc"] = "123"
+    payload["cvc"] = "911"
     respx.get(f"{BASE_URL}/issuing/cards/{CARD_ID}").mock(
         return_value=httpx.Response(200, json=payload)
     )
@@ -394,7 +441,7 @@ async def test_a_card_response_never_carries_pan_or_cvc_into_the_ledger(
     card = await adapter.get_card(CARD_ID)
 
     flattened = json.dumps(card.raw)
-    for leaked in ("4242424242424242", "123", "Ada", "Lovelace", "Analytical Engine"):
+    for leaked in ("4242424242424242", "911", "Ada", "Lovelace", "Analytical Engine"):
         assert leaked not in flattened, f"{leaked!r} reached the ledger payload"
     assert card.raw["provider_status"] == "inactive"
     assert card.raw["brand"] == "Visa"
@@ -797,7 +844,7 @@ async def test_a_transition_on_a_card_that_cannot_be_read_back_reports_the_origi
         return_value=httpx.Response(404, json=fixture("error_resource_missing"))
     )
 
-    with pytest.raises(StripeApiError, match="canceled card"):
+    with pytest.raises(StripeApiError, match="canceled"):
         await adapter.freeze_card("ic_nope")
 
 

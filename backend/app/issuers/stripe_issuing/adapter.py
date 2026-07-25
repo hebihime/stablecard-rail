@@ -197,6 +197,20 @@ SANDBOX_ADDRESS: Mapping[str, str] = {
     "country": "US",
 }
 
+#: A US Issuing program requires the cardholder to have accepted the card-issuing
+#: terms, recorded as the IP and timestamp of their acceptance. Without it the
+#: cardholder sits at `requirements.past_due` and *every* `activate_card` fails with
+#: "This cardholder has outstanding requirements preventing them from activating an
+#: issued card" — which no published example object shows, and a live test account
+#: says immediately (docs/ARCHITECTURE.md §8.10).
+#:
+#: A placeholder, like the address above, and less defensible than the address: this
+#: one attests to something a person did. A real program records the user's own IP and
+#: the moment they accepted, which is the one field `CreateCardholderRequest` would
+#: genuinely have to grow (§8.1). For a sandbox with KYC out of scope (SPEC.md §2)
+#: there is no such moment, so the adapter's clock stands in for it.
+SANDBOX_TERMS_IP = "127.0.0.1"
+
 #: Namespaces for the deterministic `Idempotency-Key`s. Two of them, so a card
 #: creation and a funding can never derive the same key.
 _CREATE_CARD_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:stablecard:stripe-issuing:create-card")
@@ -262,9 +276,19 @@ class StripeIssuingAdapter(CardIssuerAdapter):
             "email": req.email,
             "phone_number": SANDBOX_PHONE_NUMBER,
             "billing": {"address": dict(SANDBOX_ADDRESS)},
-            # Stripe lists both as `past_due` until they are set, and a card cannot
-            # be activated while a requirement is outstanding.
-            "individual": {"first_name": req.first_name, "last_name": req.last_name},
+            # Stripe lists all four of these as `past_due` until they are set, and a
+            # card cannot be activated while any requirement is outstanding.
+            "individual": {
+                "first_name": req.first_name,
+                "last_name": req.last_name,
+                "card_issuing": {
+                    "user_terms_acceptance": {
+                        "ip": SANDBOX_TERMS_IP,
+                        # Unix seconds, and meant to be when the user accepted.
+                        "date": int(self._clock().timestamp()),
+                    }
+                },
+            },
         }
         if req.external_ref:
             payload["metadata"] = {EXTERNAL_REF_KEY: req.external_ref}
@@ -302,11 +326,14 @@ class StripeIssuingAdapter(CardIssuerAdapter):
             "status": "inactive",
         }
         if req.spend_limit_minor is not None:
+            # No `spending_limits_currency`: it is on the response object but is not a
+            # writable parameter for a card — Stripe answers 400 "Received unknown
+            # parameter" — because it is derived from the card's own currency. It *is*
+            # writable on a cardholder, which is how it got in here (§8.10).
             payload["spending_controls"] = {
                 "spending_limits": [
                     {"amount": _checked_limit(req.spend_limit_minor), "interval": ALL_TIME}
-                ],
-                "spending_limits_currency": currency,
+                ]
             }
         if req.memo:
             payload["metadata"] = {MEMO_KEY: req.memo}
@@ -496,9 +523,10 @@ class StripeIssuingAdapter(CardIssuerAdapter):
                 body={
                     "spending_controls": {
                         # Restated every time: a limit on any other interval is not a
-                        # balance, and this write replaces the whole control.
-                        "spending_limits": [{"amount": raised, "interval": ALL_TIME}],
-                        "spending_limits_currency": current.currency.lower(),
+                        # balance, and this write replaces the whole control. No
+                        # `spending_limits_currency` — it is read-only on a card, and
+                        # sending it made every funding call a 400 (§8.10).
+                        "spending_limits": [{"amount": raised, "interval": ALL_TIME}]
                     },
                     # Our own keys restated alongside the new marker, for the reason
                     # in `activate_card`.
@@ -665,9 +693,7 @@ class StripeIssuingAdapter(CardIssuerAdapter):
         common["cardholder_id"] = _event_cardholder_id(provider_type, obj)
 
         if provider_type == AUTHORIZATION_CREATED:
-            return CardEvent(
-                **common, event_type=CardEventType.AUTHORIZATION, amount=_event_amount(obj)
-            )
+            return _authorization_created(common, obj)
         if provider_type == AUTHORIZATION_UPDATED:
             return _authorization_update(common, obj, previous)
         if provider_type == TRANSACTION_CREATED:
@@ -720,6 +746,31 @@ def _event_cardholder_id(provider_type: str, obj: Mapping[str, Any]) -> str | No
     if provider_type in CARDHOLDER_EVENTS:
         return _optional_str(obj.get("id"))
     return _reference(obj.get("cardholder"))
+
+
+def _authorization_created(common: dict[str, Any], obj: Mapping[str, Any]) -> CardEvent:
+    """An `issuing_authorization.created`, which is not always an authorization.
+
+    Stripe sends this for a *declined* attempt too, with `approved: false` and a
+    reason in `request_history`. Calling that an `AUTHORIZATION` would put an amount
+    in the ledger for money that was never held, and a balance reconciled against it
+    would come out short. So a decline is recorded under its own label instead — the
+    same treatment as the `closed` update, and what `UNMAPPED` is for (SPEC.md §3.3).
+
+    Not hypothetical: on a program with no real-time authorization endpoint, Stripe
+    declines some attempts with `cardholder_verification_required` because there is
+    nobody to ask within its two-second window (docs/ARCHITECTURE.md §8.8, §8.10).
+    `get_balance` already refuses to count an unapproved hold; this is the same fact
+    on the event path.
+    """
+    if obj.get("approved") is True:
+        return CardEvent(
+            **common, event_type=CardEventType.AUTHORIZATION, amount=_event_amount(obj)
+        )
+    return CardEvent(
+        **{**common, "provider_event_type": f"{common['provider_event_type']}:declined"},
+        event_type=CardEventType.UNMAPPED,
+    )
 
 
 def _authorization_update(

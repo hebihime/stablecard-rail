@@ -47,8 +47,6 @@ from app.issuers.stripe_issuing.client import StripeClient
 from app.issuers.stripe_issuing.signing import signature_header
 
 SECRET = "whsec_c3RhYmxlY2FyZA=="
-CARD_ID = "ic_1SbCardStablecard0001"
-HOLDER_ID = "ich_1SbHolderStablecard01"
 NOW = datetime(2026, 7, 25, 18, 0, tzinfo=UTC)
 
 FIXTURES = Path(__file__).parent / "fixtures" / "stripe_issuing"
@@ -61,6 +59,102 @@ def fixture_bytes(name: str) -> bytes:
 
 def fixture(name: str) -> Any:
     return json.loads(fixture_bytes(name))
+
+
+def event_id(name: str) -> str:
+    return str(fixture(name)["id"])
+
+
+def occurred(name: str) -> datetime:
+    return datetime.fromtimestamp(fixture(name)["created"], tz=UTC)
+
+
+#: Derived from the recorded fixtures, so a re-record cannot break these on ids.
+CARD_ID: str = fixture("card_created")["id"]
+HOLDER_ID: str = fixture("card_created")["cardholder"]["id"]
+
+#: Which of these envelopes are real. `scripts/record_stripe_fixtures.py` captured six
+#: event types from `GET /v1/events` after driving the account; the rest are still
+#: hand-authored from Stripe's published examples, because the walk never produced
+#: them — a refund, a dispute, a token event, an authorization Stripe asked us to
+#: decide in real time, and the `expired` spelling of a lapsed authorization (this
+#: account's API version, 2026-06-24.dahlia, reports `reversed`). Each test below says
+#: which kind it is using.
+RECORDED = (
+    "event_card_created",
+    "event_card_updated",
+    "event_authorization_created",
+    "event_authorization_updated",
+    "event_transaction_created",
+    "event_cardholder_created",
+)
+
+
+def test_every_event_name_this_adapter_maps_is_one_stripe_actually_sends() -> None:
+    """The event names in `adapter.py` are hand-typed strings. This is what checks them.
+
+    `event_type_census.json` is the distribution of `type` over the last hundred events
+    on the recording account — the provider's own vocabulary. A mapping keyed on
+    `issuing_authorisation.created` (British spelling), or on an event type Stripe
+    renamed, would otherwise sit there mapping nothing, and the only symptom would be
+    settlements silently arriving as `UNMAPPED`.
+
+    Scoped to the event families this walk exercises. `issuing_dispute.*` and
+    `issuing_token.*` are real but need a filing or a wallet to provoke, and
+    `issuing_authorization.request` needs a real-time endpoint — so those names stay
+    unchecked here, and their fixtures are authored (see RECORDED).
+    """
+    sent = set(fixture("event_type_census"))
+    assert len(sent) > 5, "the census looks empty; re-record before trusting this"
+
+    claimed = {
+        stripe_adapter.AUTHORIZATION_CREATED,
+        stripe_adapter.AUTHORIZATION_UPDATED,
+        stripe_adapter.TRANSACTION_CREATED,
+        *stripe_adapter.CARD_LIFECYCLE_EVENTS,
+        *stripe_adapter.CARDHOLDER_EVENTS,
+    }
+    unknown = claimed - sent
+    assert not unknown, (
+        f"{sorted(unknown)} appear in the adapter's mapping tables but not in Stripe's "
+        f"own event feed. Either the name is wrong, or Stripe renamed it — and a "
+        f"mapping keyed on a name nobody sends maps nothing, silently."
+    )
+
+
+def test_the_event_families_we_ignore_are_a_deliberate_list() -> None:
+    # The census also carries families this adapter has no opinion about. They arrive as
+    # UNMAPPED, which is correct (SPEC.md §3.3: never dropped) — but a *new* one showing
+    # up here should be a decision rather than a silent default, so it is listed.
+    ignored = {
+        # Account-level, not card-level: the Issuing balance moving.
+        "balance.available",
+        "received_debit.created",
+        "received_hold.amount_adjusted",
+    }
+    claimed = {
+        stripe_adapter.AUTHORIZATION_CREATED,
+        stripe_adapter.AUTHORIZATION_UPDATED,
+        stripe_adapter.TRANSACTION_CREATED,
+        *stripe_adapter.CARD_LIFECYCLE_EVENTS,
+        *stripe_adapter.CARDHOLDER_EVENTS,
+    }
+
+    unaccounted = set(fixture("event_type_census")) - claimed - ignored
+    assert not unaccounted, (
+        f"Stripe sent {sorted(unaccounted)}, which is neither mapped nor on the "
+        f"deliberately-ignored list. It is being ledgered as UNMAPPED; decide whether "
+        f"that is right and then add it to one list or the other."
+    )
+
+
+def test_the_recorded_envelopes_are_the_ones_we_think() -> None:
+    # Guards the comment above from drifting: if a re-record stops producing one of
+    # these, the tests that rely on a real envelope should say so rather than quietly
+    # fall back to an authored one.
+    for name in RECORDED:
+        assert fixture(name)["object"] == "event", name
+        assert fixture(name)["livemode"] is False, name
 
 
 async def no_sleep(seconds: float) -> None:
@@ -94,16 +188,16 @@ def signed(body: bytes, *, at: datetime = NOW, secret: str = SECRET) -> dict[str
 
 
 async def test_a_genuine_delivery_is_authenticated(adapter: StripeIssuingAdapter) -> None:
-    body = fixture_bytes("event_transaction_capture")
+    body = fixture_bytes("event_transaction_created")
 
     assert await adapter.verify_webhook(signed(body), body)
 
 
 async def test_a_tampered_body_is_refused(adapter: StripeIssuingAdapter) -> None:
-    body = fixture_bytes("event_transaction_capture")
+    body = fixture_bytes("event_transaction_created")
     headers = signed(body)
 
-    assert not await adapter.verify_webhook(headers, body.replace(b"-1234", b"-9999"))
+    assert not await adapter.verify_webhook(headers, body.replace(b"-250", b"-9999"))
 
 
 async def test_an_unconfigured_endpoint_fails_closed(
@@ -120,7 +214,7 @@ async def test_an_unconfigured_endpoint_fails_closed(
     # included. Fixing that is a one-line change in `alembic/env.py` and therefore
     # not this phase's to make; it is reported instead.
     monkeypatch.setattr(stripe_adapter.logger, "disabled", False)
-    body = fixture_bytes("event_transaction_capture")
+    body = fixture_bytes("event_transaction_created")
     unconfigured = make_adapter(secret="")
 
     with caplog.at_level(logging.WARNING):
@@ -130,7 +224,7 @@ async def test_an_unconfigured_endpoint_fails_closed(
 
 
 async def test_a_stale_delivery_is_refused(adapter: StripeIssuingAdapter) -> None:
-    body = fixture_bytes("event_transaction_capture")
+    body = fixture_bytes("event_transaction_created")
     headers = signed(body, at=NOW.replace(hour=12))
 
     assert not await adapter.verify_webhook(headers, body)
@@ -145,9 +239,9 @@ async def test_the_dedup_id_is_the_event_id_from_the_body(
     # Lithic's arrives in a header; Stripe's is in the body. Both are inside the
     # signed content, which is what stops a captured delivery being relabelled as a
     # new event and processed twice (SPEC.md §4).
-    body = fixture_bytes("event_transaction_capture")
+    body = fixture_bytes("event_transaction_created")
 
-    assert adapter.webhook_event_id(signed(body), body) == "evt_1SbEvTxnCapture001"
+    assert adapter.webhook_event_id(signed(body), body) == event_id("event_transaction_created")
 
 
 @pytest.mark.parametrize(
@@ -172,19 +266,54 @@ async def test_an_authorization_is_normalized_with_its_held_amount(
     event = await adapter.parse_webhook({}, fixture_bytes("event_authorization_created"))
 
     assert event.provider_id == PROVIDER_ID
-    assert event.event_id == "evt_1SbEvAuthCreated001"
+    assert event.event_id == event_id("event_authorization_created")
     assert event.event_type is CardEventType.AUTHORIZATION
     assert event.provider_event_type == "issuing_authorization.created"
     assert event.card_id == CARD_ID
     assert event.cardholder_id == HOLDER_ID
-    assert event.amount == Money(3000, "USD")
+    recorded = fixture("event_authorization_created")["data"]["object"]
+    assert event.amount == Money(recorded["amount"], "USD")
     # The Event's own timestamp: for an update, the object's `created` is when the
     # object was made rather than when it changed.
-    assert event.occurred_at == datetime(2026, 7, 25, 18, 10, 1, tzinfo=UTC)
+    assert event.occurred_at == occurred("event_authorization_created")
+
+
+async def test_a_declined_authorization_is_not_an_authorization(
+    adapter: StripeIssuingAdapter,
+) -> None:
+    # Stripe sends `issuing_authorization.created` for a declined attempt too, with
+    # `approved: false`. Calling that an AUTHORIZATION would put an amount in the
+    # ledger for money that was never held, and a reconciled balance would come out
+    # short. Found live: on a program with no real-time authorization endpoint, Stripe
+    # declines some attempts with `cardholder_verification_required` because there is
+    # nobody to ask inside its two-second window (docs/ARCHITECTURE.md §8.10).
+    payload = fixture("event_authorization_created")
+    assert payload["data"]["object"]["approved"] is True, "the recorded one was approved"
+    payload["data"]["object"]["approved"] = False
+    payload["data"]["object"]["status"] = "closed"
+    payload["data"]["object"]["request_history"] = [
+        {"amount": 1234, "approved": False, "reason": "cardholder_verification_required"}
+    ]
+
+    event = await adapter.parse_webhook({}, json.dumps(payload).encode())
+
+    assert event.event_type is CardEventType.UNMAPPED
+    assert event.provider_event_type == "issuing_authorization.created:declined"
+    # Nothing was held, so there is no amount to report — and the reason is still in
+    # `raw` for whoever asks why.
+    assert event.amount is None
+    assert event.raw["object"]["request_history"][0]["reason"] == (
+        "cardholder_verification_required"
+    )
 
 
 @pytest.mark.parametrize(
-    "name", ["event_authorization_reversed", "event_authorization_expired"], ids=["void", "lapse"]
+    "name",
+    # The first is recorded from the account; the second is authored, because this
+    # account's API version (2026-06-24.dahlia) reports a lapse as `reversed` and never
+    # sends `expired`. Mapping both is what makes leaving `Stripe-Version` unpinned safe.
+    ["event_authorization_updated", "event_authorization_expired"],
+    ids=["recorded-void", "authored-lapse"],
 )
 async def test_a_reversal_reports_the_amount_that_was_released(
     adapter: StripeIssuingAdapter, name: str
@@ -192,10 +321,14 @@ async def test_a_reversal_reports_the_amount_that_was_released(
     # Stripe zeroes `amount` on a void, so `previous_attributes` is the only place
     # the released magnitude survives. An event that said 0 would be useless to a
     # ledger, and `expired` and `reversed` differ only by API version.
+    payload = fixture(name)
+    released = payload["data"]["previous_attributes"]["amount"]
+    assert payload["data"]["object"]["amount"] == 0, "the object really does say zero"
+
     event = await adapter.parse_webhook({}, fixture_bytes(name))
 
     assert event.event_type is CardEventType.AUTHORIZATION_REVERSAL
-    assert event.amount == Money(3000, "USD")
+    assert event.amount == Money(released, "USD")
 
 
 async def test_a_reversal_without_previous_attributes_falls_back_honestly(
@@ -203,7 +336,7 @@ async def test_a_reversal_without_previous_attributes_falls_back_honestly(
 ) -> None:
     # No invented number: if the old amount is not in the envelope, report what the
     # object says even when that is zero.
-    payload = fixture("event_authorization_reversed")
+    payload = fixture("event_authorization_updated")
     del payload["data"]["previous_attributes"]
 
     event = await adapter.parse_webhook({}, json.dumps(payload).encode())
@@ -217,7 +350,7 @@ async def test_a_reversal_whose_previous_attributes_omit_the_amount_falls_back(
 ) -> None:
     # `previous_attributes` carries only the fields that changed, so a reversal that
     # did not change `amount` has none to give back.
-    payload = fixture("event_authorization_reversed")
+    payload = fixture("event_authorization_updated")
     payload["data"]["previous_attributes"] = {"status": "pending"}
 
     event = await adapter.parse_webhook({}, json.dumps(payload).encode())
@@ -247,7 +380,7 @@ async def test_an_amount_that_is_not_integer_minor_units_is_a_parse_error(
     # Money is integer minor units everywhere (SPEC.md §1), and a float that parsed
     # would put a rounding error into the ledger. `True` is an int subclass, which is
     # exactly why it is checked separately.
-    payload = fixture("event_transaction_capture")
+    payload = fixture("event_transaction_created")
     payload["data"]["object"]["amount"] = amount
 
     with pytest.raises(WebhookParseError, match="minor units"):
@@ -273,24 +406,31 @@ async def test_a_real_time_authorization_request_is_not_an_authorization(
     # `issuing_authorization.request` is a two-second request for a decision, not a
     # record that money moved. This pipeline verifies, dedups and queues (SPEC.md
     # §4), so it is never the thing that answers one.
+    # Authored: Stripe only sends this to an account with a real-time authorization
+    # endpoint configured, so the recording walk never saw one.
+    authored = fixture("event_authorization_request")["data"]["object"]
     event = await adapter.parse_webhook({}, fixture_bytes("event_authorization_request"))
 
     assert event.event_type is CardEventType.UNMAPPED
     assert event.provider_event_type == "issuing_authorization.request"
-    assert event.card_id == CARD_ID
+    assert event.card_id == authored["card"]["id"]
 
 
 async def test_a_capture_is_a_settlement(adapter: StripeIssuingAdapter) -> None:
-    event = await adapter.parse_webhook({}, fixture_bytes("event_transaction_capture"))
+    signed_amount = fixture("event_transaction_created")["data"]["object"]["amount"]
+    assert signed_amount < 0, "Stripe really does sign a capture negative"
+
+    event = await adapter.parse_webhook({}, fixture_bytes("event_transaction_created"))
 
     assert event.event_type is CardEventType.SETTLEMENT
     assert event.card_id == CARD_ID
-    # Stripe signs a capture negative; `CardEventType` already says which way the
-    # money went, so a sign here would only invite double negation downstream.
-    assert event.amount == Money(1234, "USD")
+    # `CardEventType` already says which way the money went, so a sign here would only
+    # invite double negation downstream.
+    assert event.amount == Money(abs(signed_amount), "USD")
 
 
 async def test_a_refund_is_a_refund(adapter: StripeIssuingAdapter) -> None:
+    # Authored: the recording walk never produced a refund.
     event = await adapter.parse_webhook({}, fixture_bytes("event_transaction_refund"))
 
     assert event.event_type is CardEventType.REFUND
@@ -321,14 +461,18 @@ async def test_a_created_card_is_a_lifecycle_event_reporting_its_state(
     assert event.amount is None
 
 
-async def test_an_activated_card_reports_active(adapter: StripeIssuingAdapter) -> None:
-    event = await adapter.parse_webhook({}, fixture_bytes("event_card_activated"))
+async def test_a_card_update_reports_the_state_it_moved_to(
+    adapter: StripeIssuingAdapter,
+) -> None:
+    # Recorded: the walk's last change was the cancellation, so this is the real
+    # `issuing_card.updated` for it, marker and all.
+    event = await adapter.parse_webhook({}, fixture_bytes("event_card_updated"))
 
     assert event.event_type is CardEventType.CARD_LIFECYCLE
-    assert event.card_state is CardState.ACTIVE
-    # The delivery is the result of a call we made, and our own idempotency key came
-    # back with it — which is what lets a handler tie an event to its cause.
-    assert event.raw["request"]["idempotency_key"] is not None
+    assert event.card_state is CardState.CANCELED
+    # `previous_attributes` says what it moved *from*, which is the other half of a
+    # lifecycle change and is kept for exactly that reason.
+    assert event.raw["previous_attributes"] == {"status": "active"}
 
 
 async def test_a_frozen_card_reports_frozen_from_the_marker_in_the_payload(
@@ -336,7 +480,7 @@ async def test_a_frozen_card_reports_frozen_from_the_marker_in_the_payload(
 ) -> None:
     # Same ambiguity as on the REST path, resolved the same way: `inactive` with an
     # activation marker is a freeze, without one it is a card never used.
-    payload = fixture("event_card_activated")
+    payload = fixture("event_card_updated")
     payload["data"]["object"]["status"] = "inactive"
 
     event = await adapter.parse_webhook({}, json.dumps(payload).encode())
@@ -381,11 +525,13 @@ async def test_a_cardholder_event_is_not_a_card_lifecycle_event(
 async def test_an_event_family_we_have_no_opinion_about_is_recorded_anyway(
     adapter: StripeIssuingAdapter,
 ) -> None:
+    # Authored: no wallet was provisioned during the walk.
+    authored = fixture("event_token_created")["data"]["object"]
     event = await adapter.parse_webhook({}, fixture_bytes("event_token_created"))
 
     assert event.event_type is CardEventType.UNMAPPED
     assert event.provider_event_type == "issuing_token.created"
-    assert event.card_id == CARD_ID
+    assert event.card_id == authored["card"]
 
 
 async def test_an_event_with_no_object_is_unmapped_rather_than_rejected(
@@ -437,9 +583,10 @@ async def test_everything_that_is_not_an_expansion_survives(
     event = await adapter.parse_webhook({}, fixture_bytes("event_authorization_created"))
 
     obj = event.raw["object"]
-    assert obj["merchant_data"]["name"] == "THE ANALYTICAL HOTEL"
-    assert obj["verification_data"]["cvc_check"] == "match"
-    assert obj["status"] == "pending"
+    recorded = fixture("event_authorization_created")["data"]["object"]
+    assert obj["merchant_data"]["name"] == recorded["merchant_data"]["name"]
+    assert obj["verification_data"] == recorded["verification_data"]
+    assert obj["status"] == recorded["status"]
     # The card was expanded on the authorization; it is an id again.
     assert obj["card"] == CARD_ID
 
@@ -474,7 +621,7 @@ async def test_a_body_with_no_event_id_raises_rather_than_inventing_one(
 ) -> None:
     # `event_id` is the dedup key. A generated one would make every redelivery a new
     # event.
-    payload = fixture("event_transaction_capture")
+    payload = fixture("event_transaction_created")
     del payload["id"]
 
     with pytest.raises(WebhookParseError, match="id"):
@@ -484,7 +631,7 @@ async def test_a_body_with_no_event_id_raises_rather_than_inventing_one(
 async def test_an_unreadable_event_timestamp_falls_back_to_our_clock(
     adapter: StripeIssuingAdapter,
 ) -> None:
-    payload = fixture("event_transaction_capture") | {"created": "yesterday"}
+    payload = fixture("event_transaction_created") | {"created": "yesterday"}
 
     event = await adapter.parse_webhook({}, json.dumps(payload).encode())
 

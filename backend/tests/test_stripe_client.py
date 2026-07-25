@@ -45,6 +45,11 @@ def fixture(name: str) -> Any:
     return json.loads((FIXTURES / f"{name}.json").read_text())
 
 
+#: Read out of the recorded fixtures, so re-running the recorder cannot break these
+#: tests on ids alone. Stripe's ids are opaque to us anyway (SPEC.md §1).
+CARD_ID: str = fixture("card_created")["id"]
+
+
 class Sleeps:
     """Stands in for `asyncio.sleep`, so a retry test costs nothing to run."""
 
@@ -310,21 +315,22 @@ async def test_list_all_follows_the_cursor_to_the_end(sleeps: Sleeps) -> None:
     )
 
     collected = await make_client(sleeps).list_all(
-        "/issuing/transactions", params={"card": "ic_1SbCardStablecard0001"}
+        "/issuing/transactions", params={"card": CARD_ID}
     )
 
-    assert [entry["id"] for entry in collected] == [
-        "ipi_1SbTxnStablecard0002",
-        "ipi_1SbTxnStablecard0001",
-        "ipi_1SbTxnStablecard0000",
+    expected = [
+        entry["id"]
+        for page in ("transactions_page_1", "transactions_page_2")
+        for entry in fixture(page)["data"]
     ]
+    assert [entry["id"] for entry in collected] == expected
     first, second = route.calls[0].request, route.calls[1].request
     assert first.url.params["limit"] == str(DEFAULT_PAGE_SIZE)
     assert "starting_after" not in first.url.params
     # The cursor is the last id on the previous page: Stripe lists newest-first, so
     # `starting_after` walks further back in time.
-    assert second.url.params["starting_after"] == "ipi_1SbTxnStablecard0001"
-    assert second.url.params["card"] == "ic_1SbCardStablecard0001"
+    assert second.url.params["starting_after"] == fixture("transactions_page_1")["data"][-1]["id"]
+    assert second.url.params["card"] == CARD_ID
 
 
 @respx.mock
@@ -378,7 +384,8 @@ async def test_an_error_body_becomes_a_typed_issuer_error(sleeps: Sleeps) -> Non
     assert error.status == 404
     assert error.code == "resource_missing"
     assert error.error_type == "invalid_request_error"
-    assert error.param == "id"
+    # Stripe names the parameter it could not resolve, which is not always `id`.
+    assert error.param == fixture("error_resource_missing")["error"]["param"]
     assert "No such issuing card" in error.message
     # Stripe's error body carries a link to the request log, which is the first
     # thing their support asks for.
@@ -452,7 +459,7 @@ async def test_a_rate_limit_is_retried_with_increasing_backoff(sleeps: Sleeps) -
 
     card = await make_client(sleeps).get("/issuing/cards/ic_1")
 
-    assert card["id"] == "ic_1SbCardStablecard0001"
+    assert card["id"] == CARD_ID
     assert sleeps.waited == [1.0, 2.0]
 
 
