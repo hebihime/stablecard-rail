@@ -34,6 +34,14 @@ services:
   backend:
     build:
       context: ./backend
+    # Provider credentials reach the container from `.env` rather than from a line
+    # per variable here, so adding an issuer is not a change to this file. Optional,
+    # because phases 1-2 need no credentials at all. `environment:` below wins over
+    # anything with the same name in `.env`, which is what keeps DATABASE_URL and
+    # REDIS_URL pointing at the container-internal hosts.
+    env_file:
+      - path: .env
+        required: false
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -43,12 +51,11 @@ services:
       REDIS_URL: redis://redis:6379/0
       WEBHOOK_DEDUP_TTL_SECONDS: ${WEBHOOK_DEDUP_TTL_SECONDS:-86400}
       WEBHOOK_RETRY_BACKOFF_SECONDS: ${WEBHOOK_RETRY_BACKOFF_SECONDS:-[2,8,32,128,512]}
-      # Nothing provider-specific is listed here, and nothing should be. Each
+      # Nothing provider-specific is listed here, and nothing should be: each
       # adapter declares its own settings under its own env prefix
-      # (app/issuers/<name>/config.py), so a provider's variables reach the
-      # container the same way any other environment variable does — which keeps
-      # "adding an issuer" from being a change to this file. The webhook signature
-      # window moved with them; it is LITHIC_SIGNATURE_TOLERANCE_SECONDS now.
+      # (app/issuers/<name>/config.py) and they arrive via `env_file` above. The
+      # webhook signature window moved with them, so there is no global
+      # WEBHOOK_SIGNATURE_TOLERANCE_SECONDS any more.
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
