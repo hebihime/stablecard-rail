@@ -569,8 +569,8 @@ class GnosisPaySimulator:
                 card_id=card_id,
                 funding_ref=funding_ref,
                 # No provider-side object exists to reference: nothing has been
-                # observed yet.
-                issuer_funding_ref="",
+                # observed yet. `None`, not `""` — see `FundingResult`.
+                issuer_funding_ref=None,
                 status=FundingStatus.PENDING,
                 amount=amount,
                 raw={

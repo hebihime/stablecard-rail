@@ -220,8 +220,13 @@ class FundingResult(_Frozen):
     card_id: str
     #: Our idempotency key — the funding intent id (SPEC.md §5.2 step 3).
     funding_ref: str
-    #: The provider's own reference, for reconciliation and support.
-    issuer_funding_ref: str
+    #: The provider's own reference, for reconciliation and support. `None` means
+    #: *nothing has been observed yet*, which is the honest answer for a
+    #: `CRYPTO_DEPOSIT` provider asked to fund before a deposit confirms: there is
+    #: no provider-side object to point at. An empty string would have claimed
+    #: there is one and that it is nameless. `FundingIntent.issuer_funding_ref` is
+    #: nullable for the same reason, so this makes the DTO and the column agree.
+    issuer_funding_ref: str | None = None
     status: FundingStatus
     amount: Money
     raw: dict[str, Any] = Field(default_factory=dict)

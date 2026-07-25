@@ -290,7 +290,9 @@ async def test_funding_before_the_deposit_lands_is_pending(
 
     assert result.status is FundingStatus.PENDING
     # No provider-side object exists yet: nothing has been observed to reference.
-    assert result.issuer_funding_ref == ""
+    # `None` rather than `""`, so "not yet" is distinguishable from "a reference
+    # that happens to be empty".
+    assert result.issuer_funding_ref is None
     assert await adapter.get_balance(card_id) == Money(0, "USD")
 
 

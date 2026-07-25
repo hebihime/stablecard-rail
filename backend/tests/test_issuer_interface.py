@@ -188,5 +188,21 @@ def test_funding_result_reports_a_status_and_both_references() -> None:
     assert result.status is FundingStatus.SUCCEEDED
 
 
+def test_the_issuers_reference_is_optional_because_pending_funding_has_none() -> None:
+    # A `CRYPTO_DEPOSIT` provider asked to fund before a deposit confirms has no
+    # provider-side object to name. `""` would have claimed one exists and is
+    # nameless; `None` says nothing has been observed. `FundingIntent`'s column is
+    # nullable for the same reason, so the DTO and the row now agree.
+    result = FundingResult(
+        provider_id="gnosis_pay_mock",
+        card_id="card_1",
+        funding_ref="our-intent-id",
+        status=FundingStatus.PENDING,
+        amount=Money(2500, "USD"),
+    )
+    assert result.issuer_funding_ref is None
+    assert FundingResult.model_fields["issuer_funding_ref"].default is None
+
+
 def test_deposit_address_is_optional_so_fiat_rail_adapters_need_not_invent_one() -> None:
     assert Card.model_fields["deposit_address"].default is None
