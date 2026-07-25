@@ -1,0 +1,71 @@
+{
+  "object": "list",
+  "url": "/v1/issuing/transactions",
+  "has_more": true,
+  "data": [
+    {
+      "id": "ipi_1SbTxnStablecard0002",
+      "object": "issuing.transaction",
+      "amount": 250,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "authorization": "iauth_1SbAuthStablecard002",
+      "balance_transaction": "txn_1SbBalStablecard0002",
+      "card": "ic_1SbCardStablecard0001",
+      "cardholder": "ich_1SbHolderStablecard01",
+      "created": 1785002000,
+      "currency": "usd",
+      "dispute": null,
+      "livemode": false,
+      "merchant_amount": 250,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "eating_places_restaurants",
+        "category_code": "5812",
+        "city": "NEW YORK",
+        "country": "US",
+        "name": "COFFEE BY THE PARK",
+        "network_id": "1234567890",
+        "postal_code": "10128",
+        "state": "NY"
+      },
+      "metadata": {},
+      "type": "refund",
+      "wallet": null
+    },
+    {
+      "id": "ipi_1SbTxnStablecard0001",
+      "object": "issuing.transaction",
+      "amount": -1234,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "authorization": "iauth_1SbAuthStablecard001",
+      "balance_transaction": "txn_1SbBalStablecard0001",
+      "card": "ic_1SbCardStablecard0001",
+      "cardholder": "ich_1SbHolderStablecard01",
+      "created": 1785001000,
+      "currency": "usd",
+      "dispute": null,
+      "livemode": false,
+      "merchant_amount": -1234,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "computer_software_stores",
+        "category_code": "5734",
+        "city": "SAN FRANCISCO",
+        "country": "US",
+        "name": "WWWW.BROWSEBUG.BIZ",
+        "network_id": "1234567890",
+        "postal_code": "94103",
+        "state": "CA"
+      },
+      "metadata": {},
+      "type": "capture",
+      "wallet": null
+    }
+  ]
+}

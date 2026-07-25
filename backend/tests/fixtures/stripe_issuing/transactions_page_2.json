@@ -1,0 +1,39 @@
+{
+  "object": "list",
+  "url": "/v1/issuing/transactions",
+  "has_more": false,
+  "data": [
+    {
+      "id": "ipi_1SbTxnStablecard0000",
+      "object": "issuing.transaction",
+      "amount": -500,
+      "amount_details": {
+        "atm_fee": null,
+        "cashback_amount": null
+      },
+      "authorization": "iauth_1SbAuthStablecard000",
+      "balance_transaction": "txn_1SbBalStablecard0000",
+      "card": "ic_1SbCardStablecard0001",
+      "cardholder": "ich_1SbHolderStablecard01",
+      "created": 1785000500,
+      "currency": "usd",
+      "dispute": null,
+      "livemode": false,
+      "merchant_amount": -500,
+      "merchant_currency": "usd",
+      "merchant_data": {
+        "category": "taxicabs_limousines",
+        "category_code": "4121",
+        "city": "NEW YORK",
+        "country": "US",
+        "name": "YELLOW CAB CO",
+        "network_id": "1234567890",
+        "postal_code": "10128",
+        "state": "NY"
+      },
+      "metadata": {},
+      "type": "capture",
+      "wallet": null
+    }
+  ]
+}
