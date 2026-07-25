@@ -30,7 +30,7 @@ from app.issuers.base import (
     FundingResult,
     WebhookParseError,
 )
-from app.issuers.evm_deposit_mock import EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
 from app.ledger.models import LedgerEvent
 from app.webhooks.models import WebhookDeadLetter
 
@@ -44,7 +44,7 @@ class SeedIntent(Protocol):
         state: FundingState = FundingState.PENDING,
         amount_minor: int = 2500,
         currency: str = "USD",
-        provider_id: str = "evm_deposit_mock",
+        provider_id: str = "gnosis_pay_mock",
         card_id: str = "card_test_1",
         deposit_tx_ref: str | None = None,
         retry_count: int = 0,
@@ -78,18 +78,42 @@ async def reload_intent(session: AsyncSession, intent_id: uuid.UUID) -> FundingI
 
 
 async def make_mock_card(
-    adapter: EvmDepositMockAdapter, *, currency: str = "USD", activate: bool = True
+    adapter: GnosisPayMockAdapter,
+    *,
+    activate: bool = True,
+    deposit: Money | None = Money(100_000, "USD"),
 ) -> str:
-    """A cardholder plus a card at the mock provider, returning the card id."""
+    """A user, their Safe, and a card at the mock provider. Returns the card id.
+
+    `deposit` lands on-chain rather than through `fund_card`, because at this
+    provider that is the only way money arrives (SPEC.md §3.2). Without it every
+    authorization comes back `InsufficientFunds`, which is correct but is rarely
+    what a test about something else wants.
+    """
     holder = await adapter.create_cardholder(
         CreateCardholderRequest(email="demo@example.test", first_name="Ada", last_name="Lovelace")
     )
     card = await adapter.create_card(
-        holder.cardholder_id, CreateCardRequest(currency=currency, spend_limit_minor=100_000)
+        holder.cardholder_id, CreateCardRequest(spend_limit_minor=100_000)
     )
     if activate:
         await adapter.activate_card(card.card_id)
+    if deposit is not None:
+        assert card.deposit_address is not None
+        adapter.simulator.receive_onchain_deposit(card.deposit_address, deposit)
     return card.card_id
+
+
+def mock_authorization(
+    adapter: GnosisPayMockAdapter, card_id: str, amount: Money, *, merchant: str = "Test Merchant"
+) -> tuple[str, Delivery]:
+    """An authorization at the mock provider: its thread id, and its delivery.
+
+    `authorize` returns the transaction, because clearing and reversing it need the
+    thread id; the delivery it queued is what a webhook test wants. Both, then.
+    """
+    transaction = adapter.simulator.authorize(card_id, amount, merchant=merchant)
+    return transaction.thread_id, adapter.simulator.deliveries[-1]
 
 
 class StubIssuerAdapter(CardIssuerAdapter):

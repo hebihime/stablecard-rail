@@ -71,7 +71,7 @@ from app.core.redis import get_redis  # noqa: E402
 from app.funding.models import FundingIntent  # noqa: E402
 from app.funding.states import FundingState  # noqa: E402
 from app.issuers import registry  # noqa: E402
-from app.issuers.evm_deposit_mock import EvmDepositMockAdapter  # noqa: E402
+from app.issuers.gnosis_pay_mock import GnosisPayMockAdapter  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.webhooks import dispatch  # noqa: E402
 from tests.support import SeedIntent  # noqa: E402
@@ -190,10 +190,10 @@ def isolated_subscriptions() -> Iterator[None]:
 
 
 @pytest.fixture
-def mock_adapter() -> EvmDepositMockAdapter:
+def mock_adapter() -> GnosisPayMockAdapter:
     """The registered mock provider — the same instance the receiver resolves."""
-    adapter = registry.get_adapter("evm_deposit_mock")
-    assert isinstance(adapter, EvmDepositMockAdapter)
+    adapter = registry.get_adapter("gnosis_pay_mock")
+    assert isinstance(adapter, GnosisPayMockAdapter)
     return adapter
 
 
@@ -229,7 +229,7 @@ def seed_intent(session: AsyncSession) -> SeedIntent:
         state: FundingState = FundingState.PENDING,
         amount_minor: int = 2500,
         currency: str = "USD",
-        provider_id: str = "evm_deposit_mock",
+        provider_id: str = "gnosis_pay_mock",
         card_id: str = "card_test_1",
         deposit_tx_ref: str | None = None,
         retry_count: int = 0,

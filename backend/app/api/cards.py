@@ -36,7 +36,7 @@ from app.ledger.writer import record
 
 router = APIRouter(tags=["cards"])
 
-ProviderId = Annotated[str, Path(description="Issuer registry key, e.g. `evm_deposit_mock`")]
+ProviderId = Annotated[str, Path(description="Issuer registry key, e.g. `gnosis_pay_mock`")]
 CardId = Annotated[str, Path(description="The provider's opaque card identifier")]
 Session = Annotated[AsyncSession, Depends(get_session)]
 

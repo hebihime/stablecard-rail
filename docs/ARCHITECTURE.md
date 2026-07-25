@@ -37,7 +37,7 @@ flowchart LR
         REG[registry]
         LITHIC[lithic]
         STRIPE[stripe_issuing]
-        MOCK[evm_deposit_mock]
+        MOCK[gnosis_pay_mock]
     end
 
     WH[/"POST /webhooks/{provider_id}"<br/>verify → dedup → parse → ledger → dispatch/]
@@ -56,7 +56,7 @@ flowchart LR
 ```
 
 Built so far: the core (`funding_intents`, `ledger_events`, `advance()`), the
-issuer abstraction with the `evm_deposit_mock` adapter, the card lifecycle
+issuer abstraction with the `gnosis_pay_mock` adapter, the card lifecycle
 endpoints, and the webhook receiver with its `EventBus`, retry queue and
 dead-letter table. Everything else arrives in a later phase behind an interface
 that already exists or is specified.
@@ -268,7 +268,7 @@ what phase 4 will demonstrate rather than discover.
 SPEC.md §3.1 puts `funding_model` on the interface; §3.2 asks the mock to prove the
 abstraction spans both. The distinction is *what `fund_card` means*:
 
-| | `FIAT_RAIL` (Lithic, Stripe) | `CRYPTO_DEPOSIT` (`evm_deposit_mock`) |
+| | `FIAT_RAIL` (Lithic, Stripe) | `CRYPTO_DEPOSIT` (`gnosis_pay_mock`) |
 |---|---|---|
 | Where money comes from | a program balance funded by bank transfer | a token transfer to a provider-assigned address |
 | `fund_card` | debits the program balance | attributes an observed deposit to the card |
@@ -279,10 +279,12 @@ Only two things in the shared models exist for the crypto side —
 inspectable, so a fiat adapter never invents a value it does not have. Everything
 else provider-specific lives in `raw`.
 
-Concretely, the mock's `fund_card` credits the card and then emits an asynchronous
-`settlement` webhook, which is what SPEC.md §5.2 step 4 reconciles the intent
-from. Phase 5's engine calls it only from `BRIDGED`, i.e. once funds have actually
-reached the deposit address.
+Concretely, the mock's `fund_card` **cannot move money**: the deposit is what
+creates a balance, and `fund_card` answers `PENDING` until a confirmed,
+unattributed one covers the amount. Phase 5's engine calls it only from `BRIDGED`,
+i.e. once funds have actually reached the deposit address — and `PENDING` is the
+answer when the provider has not seen them yet. §7.1 records why this replaced an
+earlier version that credited a balance.
 
 ### 3.3 `webhook_event_id` and `get_card` are additions to §3.1
 
@@ -396,18 +398,20 @@ handler can be re-run by a retry, by a drain in another process, or by hand from
 dead-letter row. `tests/test_webhook_dispatch.py` asserts that booting the app
 registers no handlers, so a consumer cannot appear ahead of its phase by accident.
 
-### 3.11 The mock provider is a package, and its secret is not a secret
+### 3.11 The mock provider is a package, and its key is not a credential
 
-`issuers/evm_deposit_mock/` is a directory rather than one file because it ships the
+`issuers/gnosis_pay_mock/` is a directory rather than one file because it ships the
 *provider* as well as the adapter: `adapter.py` is the one file a real issuer needs,
-while `simulator.py` and `signing.py` stand in for servers that, for Lithic and
-Stripe, belong to someone else.
+while `simulator.py`, `signing.py` and `config.py` stand in for servers — and for a
+chain — that, for Lithic and Stripe, belong to someone else.
 
-The simulator signs its own webhooks with `EVM_DEPOSIT_MOCK_WEBHOOK_SECRET`, which
-has a default value in `.env.example` and in `Settings`. That is not a violation of
-"no secrets in the repo": the provider it authenticates to is a Python object in
-this process, so the key grants access to nothing. Real adapter credentials (phases
-3 and 4) will have no defaults and no example values.
+The simulator signs its own webhooks, and because Gnosis Pay's scheme is asymmetric
+there is no shared secret to hold: the simulator derives an Ed25519 private key from
+a seed in `signing.py` and the adapter verifies with the public half. A seed in the
+repo is not a violation of "no secrets in a tracked file" — the party it
+authenticates is a Python object in this process, so it grants access to nothing.
+Real adapter credentials have no defaults and no example values. §7.3 records why
+the key is derived rather than generated.
 
 Everything the simulator produces is deterministic — per-kind counters for ids,
 hash-derived deposit addresses — so a demo run twice produces the same output and a
@@ -443,14 +447,18 @@ Per the working agreement this is the outcome the rule wants: an adapter that do
 not fit means the abstraction is wrong, not that the adapter should be bent. It cost
 one signature, one call site in `webhooks/receiver.py`, and no change to `funding/`,
 `ledger/` or `api/`. Phase 4's Stripe adapter reads its id from the body and will
-simply ignore the argument, exactly as `evm_deposit_mock` now does.
+simply ignore the argument.
+
+A second provider has since vindicated it: Gnosis Pay's envelope carries no
+timestamp *and* no event id, so `gnosis_pay_mock` reads `occurred_at` from
+`x-webhook-timestamp` and would be unimplementable body-only (§7.2).
 
 Asserted structurally by `tests/test_issuer_interface.py`, so it cannot silently
 narrow again.
 
 ### 4.2 Adapters share `base.py` and `core/`, and nothing else
 
-`lithic/signing.py` and `evm_deposit_mock/signing.py` both contain a six-line
+`lithic/signing.py` and `gnosis_pay_mock/signing.py` both contain a six-line
 case-insensitive header lookup. That duplication is deliberate.
 
 The rule being protected is "adding an issuer is one adapter file plus one registry
@@ -458,8 +466,11 @@ entry". A helper extracted because two adapters wanted it becomes a module the t
 adapter has to be written against, and then a module that cannot change without
 touching every adapter — which is the same coupling the abstraction exists to
 prevent, moved one level down. Six duplicated lines cost less than that, and the two
-schemes are genuinely different: Lithic's signature is base64 with a `v1,` prefix
-and rotation support, the mock's is hex with a `v1=` prefix.
+schemes are genuinely different: Lithic's is a base64 HMAC with a `v1,` prefix and
+rotation support over `"{id}.{timestamp}.{body}"`; Gnosis Pay's is a base64 Ed25519
+signature with no prefix and no key id over `"{timestamp}.{body}"`, verified with a
+published public key. §7.4 records what the same argument then said about
+configuration, which was the harder case.
 
 `tests/test_module_boundaries.py` now enforces this in both directions: no module
 outside `issuers/` imports an adapter, no adapter imports the pipeline, and no
@@ -584,7 +595,7 @@ Lithic signs its event amounts: a reversal is `-500`, a refund `-250`, a purchas
 same information twice — and the second copy is where double-negation bugs live. The
 mapping stores `abs()` and leaves `effective_polarity` in `raw`.
 
-This also keeps the two adapters agreeing: `evm_deposit_mock` emits positive amounts
+This also keeps the two adapters agreeing: `gnosis_pay_mock` emits positive amounts
 for refunds, and if Lithic reported `-250` for the same event, no consumer could sum a
 ledger without knowing which provider wrote each row.
 

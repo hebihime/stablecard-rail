@@ -12,10 +12,10 @@ import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import Money
-from app.issuers.evm_deposit_mock import EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import GnosisPayMockAdapter
 from tests.support import all_ledger_events
 
-PROVIDER = "evm_deposit_mock"
+PROVIDER = "gnosis_pay_mock"
 HOLDER = {"email": "ada@example.test", "first_name": "Ada", "last_name": "Lovelace"}
 
 
@@ -137,11 +137,16 @@ async def test_reading_a_card_reflects_the_provider_and_ledgers_nothing(
 
 
 async def test_the_balance_endpoint_speaks_integer_minor_units(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter
 ) -> None:
     card_id = str((await create_card(client))["card_id"])
     await client.post(f"/providers/{PROVIDER}/cards/{card_id}/activate")
-    await mock_adapter.fund_card(card_id, Money(2500, "USD"), "intent-abc")
+    # A confirmed transfer into the card's Safe is what creates a balance at this
+    # provider; `fund_card` only attributes one, so calling it here would leave the
+    # balance at zero (SPEC.md §3.2).
+    card = await mock_adapter.get_card(card_id)
+    assert card.deposit_address is not None
+    mock_adapter.simulator.receive_onchain_deposit(card.deposit_address, Money(2500, "USD"))
 
     response = await client.get(f"/providers/{PROVIDER}/cards/{card_id}/balance")
 

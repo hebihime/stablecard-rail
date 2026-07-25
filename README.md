@@ -62,7 +62,8 @@ backend/app/
 ├── core/       config, engine + session factory, redis, logging, Money
 ├── funding/    FundingState + transition table, FundingIntent, machine.advance()
 ├── issuers/    CardIssuerAdapter + normalized CardEvent, registry,
-│               evm_deposit_mock (crypto deposit), lithic (fiat rail)
+│               per-adapter settings, gnosis_pay_mock (crypto deposit),
+│               lithic (fiat rail)
 ├── webhooks/   receiver (verify → dedup → parse → ledger → dispatch), EventBus,
 │               retry queue with backoff, dead-letter table
 ├── ledger/     append-only LedgerEvent, event-type constants, writer
@@ -78,11 +79,13 @@ backend/app/
   rather than asserted: a test parses the import graph and fails if anything outside
   `issuers/` reaches past `base.py` and the registry, or if an adapter reaches into
   `funding/`, `ledger/`, `webhooks/` or `api/`.
-- **`evm_deposit_mock`** models the crypto-funded issuer pattern — a deposit address
-  per card, funding by confirmed token transfer — which is what proves the
-  abstraction spans both `FIAT_RAIL` and `CRYPTO_DEPOSIT` providers. It ships a
-  simulator that signs its own webhooks, so the whole pipeline runs offline with no
-  account and no fixtures to re-record.
+- **`gnosis_pay_mock`** models the Gnosis Pay partner pattern, shaped on their public
+  docs: a Safe smart account per user on Gnosis Chain, and funding that is a confirmed
+  stablecoin transfer into it rather than an API call — so `fund_card` verifies and
+  attributes a deposit it did not cause, and cannot move money. That is what proves
+  the abstraction spans both `FIAT_RAIL` and `CRYPTO_DEPOSIT` providers rather than
+  one shape twice. It ships a simulator that signs its own webhooks with real Ed25519,
+  so the whole pipeline runs offline with no account and no fixtures to re-record.
 - **`lithic`** is the first real provider, and phase 3's job was to find out where the
   abstraction did not fit. It found one place: Lithic puts the event id in a
   `webhook-id` header and sends `card.created` payloads with no timestamp at all, so

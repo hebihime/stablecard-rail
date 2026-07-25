@@ -14,12 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.money import Money
 from app.issuers.base import CardEvent, CardEventType
-from app.issuers.evm_deposit_mock import Delivery, EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
 from app.webhooks import dispatch
 from app.webhooks.retry import RetryQueue
-from tests.support import all_ledger_events, make_mock_card
+from tests.support import all_ledger_events, make_mock_card, mock_authorization
 
-PROVIDER = "evm_deposit_mock"
+PROVIDER = "gnosis_pay_mock"
 
 
 async def post(client: httpx.AsyncClient, delivery: Delivery) -> httpx.Response:
@@ -28,13 +28,14 @@ async def post(client: httpx.AsyncClient, delivery: Delivery) -> httpx.Response:
     )
 
 
-async def an_authorization(adapter: EvmDepositMockAdapter) -> Delivery:
+async def an_authorization(adapter: GnosisPayMockAdapter) -> Delivery:
     card_id = await make_mock_card(adapter)
-    return adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
+    return delivery
 
 
 async def test_a_signed_delivery_is_accepted(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter, session: AsyncSession
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter, session: AsyncSession
 ) -> None:
     delivery = await an_authorization(mock_adapter)
 
@@ -45,7 +46,7 @@ async def test_a_signed_delivery_is_accepted(
         "received": True,
         "duplicate": False,
         "provider_id": PROVIDER,
-        "event_id": delivery.event_id,
+        "event_id": delivery.derived_event_id,
         "event_type": "authorization",
         "ledger_event_id": (await all_ledger_events(session))[0].id,
         "handlers_failed": [],
@@ -53,7 +54,7 @@ async def test_a_signed_delivery_is_accepted(
 
 
 async def test_a_duplicate_delivery_is_also_a_200(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter, session: AsyncSession
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter, session: AsyncSession
 ) -> None:
     delivery = await an_authorization(mock_adapter)
     await post(client, delivery)
@@ -66,7 +67,7 @@ async def test_a_duplicate_delivery_is_also_a_200(
 
 
 async def test_an_unsigned_delivery_is_a_401(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter, session: AsyncSession
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter, session: AsyncSession
 ) -> None:
     delivery = await an_authorization(mock_adapter)
 
@@ -80,7 +81,7 @@ async def test_an_unsigned_delivery_is_a_401(
 
 
 async def test_a_tampered_body_is_a_401(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter
 ) -> None:
     delivery = await an_authorization(mock_adapter)
     response = await client.post(
@@ -98,7 +99,7 @@ async def test_an_unknown_provider_is_a_404(client: httpx.AsyncClient) -> None:
 
 
 async def test_a_failing_handler_still_returns_200_and_queues_a_retry(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter, redis_client: Redis
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter, redis_client: Redis
 ) -> None:
     """SPEC.md §4: handler exceptions never cause a non-2xx after verification."""
 
@@ -116,7 +117,7 @@ async def test_a_failing_handler_still_returns_200_and_queues_a_retry(
 
 
 async def test_an_unparseable_body_is_accepted_as_unmapped(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter, session: AsyncSession
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter, session: AsyncSession
 ) -> None:
     delivery = mock_adapter.simulator.emit_unknown("card.who_knows", {"a": 1})
 
@@ -128,7 +129,7 @@ async def test_an_unparseable_body_is_accepted_as_unmapped(
 
 
 async def test_the_endpoint_reads_raw_bytes_not_parsed_json(
-    client: httpx.AsyncClient, mock_adapter: EvmDepositMockAdapter
+    client: httpx.AsyncClient, mock_adapter: GnosisPayMockAdapter
 ) -> None:
     # Re-serializing before verifying is the classic way to break a signature
     # check: any reordering or whitespace change would fail here.

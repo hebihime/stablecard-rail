@@ -27,14 +27,14 @@ from app.core.money import Money
 from app.core.redis import get_redis_client
 from app.issuers import registry
 from app.issuers.base import CardEvent, CardEventType, CreateCardholderRequest, CreateCardRequest
-from app.issuers.evm_deposit_mock import Delivery, EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
 from app.ledger.models import LedgerEvent
 from app.webhooks import dispatch
 from app.webhooks.models import WebhookDeadLetter
 from app.webhooks.receiver import SignatureRejected, receive
 from app.webhooks.retry import RetryQueue
 
-PROVIDER = "evm_deposit_mock"
+PROVIDER = "gnosis_pay_mock"
 URL = "http://localhost:8000"
 
 
@@ -61,7 +61,7 @@ async def main() -> None:
     sessionmaker = get_sessionmaker()
 
     adapter = registry.get_adapter(PROVIDER)
-    assert isinstance(adapter, EvmDepositMockAdapter)
+    assert isinstance(adapter, GnosisPayMockAdapter)
     simulator = adapter.simulator
 
     heading("registered issuers")
@@ -81,20 +81,29 @@ async def main() -> None:
     print(f"  deposit address {card.deposit_address}")
     print(f"  balance         {await adapter.get_balance(card.card_id)}")
 
-    heading("funding is idempotent under one funding_ref")
+    heading("funding is a confirmed deposit, not an API call")
+    assert card.deposit_address is not None
+    before = await adapter.fund_card(card.card_id, Money(2500, "USD"), "intent-demo-1")
+    # `None`, because nothing has been observed to reference yet.
+    print(f"  asked too soon  {before.status}  issuer_ref={before.issuer_funding_ref}")
+    print(f"  reason          {before.raw['reason']}")
+
+    deposit = simulator.receive_onchain_deposit(card.deposit_address, Money(2500, "USD"))
+    print(f"  on chain        {deposit.amount_units} {deposit.currency.symbol} units, confirmed")
+    print(f"  tx              {deposit.tx_hash[:22]}…")
+
     first = await adapter.fund_card(card.card_id, Money(2500, "USD"), "intent-demo-1")
     second = await adapter.fund_card(card.card_id, Money(2500, "USD"), "intent-demo-1")
-    print(f"  first call      {first.status} issuer_ref={first.issuer_funding_ref}")
-    print(f"  replayed call   {second.status} issuer_ref={second.issuer_funding_ref}")
-    print(f"  same result     {first == second}")
-    print(f"  balance         {await adapter.get_balance(card.card_id)}  (credited once)")
-    simulator.drain_deliveries()  # the provider's settlement confirmation; not our subject here
+    attributed_ref = first.issuer_funding_ref or ""
+    print(f"  attributed      {first.status}  issuer_ref={attributed_ref[:22]}…")
+    print(f"  replayed call   {second.status}  same result={first == second}")
+    print(f"  balance         {await adapter.get_balance(card.card_id)}")
+    print("                  the deposit created it; fund_card only attributed it")
 
     async with sessionmaker() as session:
         heading("a signed delivery through the pipeline")
-        authorization = simulator.emit_authorization(
-            card.card_id, Money(1299, "USD"), merchant="Coffee"
-        )
+        transaction = simulator.authorize(card.card_id, Money(1299, "USD"), merchant="Coffee")
+        authorization = simulator.deliveries[-1]
         outcome = await receive(
             session,
             redis,
@@ -140,7 +149,7 @@ async def main() -> None:
 
         heading("a handler that keeps failing")
         dispatch.subscribe(CardEventType.SETTLEMENT, "balance_projection", failing_handler)
-        settlement = simulator.emit_settlement(card.card_id, Money(1299, "USD"))
+        settlement = simulator.clear(transaction.thread_id)
         failed = await receive(
             session, redis, provider_id=PROVIDER, headers=settlement.headers, body=settlement.body
         )
@@ -179,7 +188,8 @@ async def main() -> None:
 
     heading("the same thing over HTTP")
     print("  a freshly signed delivery, ready to paste (the server must be running):\n")
-    print(f"  {as_curl(simulator.emit_authorization(card.card_id, Money(499, 'USD')))}")
+    simulator.authorize(card.card_id, Money(499, "USD"))
+    print(f"  {as_curl(simulator.deliveries[-1])}")
 
 
 if __name__ == "__main__":

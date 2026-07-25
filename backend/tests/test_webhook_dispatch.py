@@ -26,7 +26,7 @@ def make_event(
     event_type: CardEventType = CardEventType.AUTHORIZATION, event_id: str = "evt_1"
 ) -> CardEvent:
     return CardEvent(
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         event_id=event_id,
         event_type=event_type,
         occurred_at=datetime(2026, 7, 25, 12, 0, tzinfo=UTC),

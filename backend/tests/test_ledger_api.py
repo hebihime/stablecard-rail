@@ -29,7 +29,7 @@ async def test_events_are_returned_oldest_first_with_full_detail(
     client: httpx.AsyncClient, session: AsyncSession
 ) -> None:
     intent = await create_intent(
-        session, provider_id="evm_deposit_mock", card_id="card_1", amount=Money(2500, "USD")
+        session, provider_id="gnosis_pay_mock", card_id="card_1", amount=Money(2500, "USD")
     )
     await advance(session, intent.id, FundingState.DEPOSIT_CONFIRMED, reason="deposit finalized")
 
@@ -62,7 +62,7 @@ async def test_filter_by_card_id(client: httpx.AsyncClient, session: AsyncSessio
 
 async def test_filter_by_intent_id(client: httpx.AsyncClient, session: AsyncSession) -> None:
     intent = await create_intent(
-        session, provider_id="evm_deposit_mock", card_id="card_1", amount=Money(100, "USD")
+        session, provider_id="gnosis_pay_mock", card_id="card_1", amount=Money(100, "USD")
     )
     await record(session, event_type="unrelated", card_id="card_9")
     await session.commit()

@@ -31,7 +31,7 @@ BACKOFF = get_settings().webhook_retry_backoff_seconds
 
 def make_event(event_id: str = "evt_1") -> CardEvent:
     return CardEvent(
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         event_id=event_id,
         event_type=CardEventType.SETTLEMENT,
         occurred_at=START,
@@ -93,7 +93,7 @@ async def test_the_queued_item_carries_everything_needed_to_retry(
     await fail_once(redis_client)
     (item,) = await RetryQueue(redis_client).due(now=START + timedelta(hours=1))
 
-    assert item.provider_id == "evm_deposit_mock"
+    assert item.provider_id == "gnosis_pay_mock"
     assert item.handler == "reconcile"
     assert item.attempts == 1
     assert item.event == make_event()
@@ -102,7 +102,7 @@ async def test_the_queued_item_carries_everything_needed_to_retry(
 
 def test_items_round_trip_through_their_wire_form() -> None:
     item = RetryItem(
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         handler="reconcile",
         attempts=2,
         last_error="boom",
@@ -188,7 +188,7 @@ async def test_exhausting_the_backoff_dead_letters_the_delivery(
     await _exhaust(session, redis_client)
 
     (letter,) = await dead_letters(session)
-    assert letter.provider_id == "evm_deposit_mock"
+    assert letter.provider_id == "gnosis_pay_mock"
     assert letter.event_id == "evt_1"
     assert letter.handler == "reconcile"
     assert letter.event_type == CardEventType.SETTLEMENT.value

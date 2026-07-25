@@ -118,7 +118,7 @@ def test_card_states_cover_the_lifecycle_methods() -> None:
 
 def _event(**overrides: object) -> CardEvent:
     defaults: dict[str, object] = {
-        "provider_id": "evm_deposit_mock",
+        "provider_id": "gnosis_pay_mock",
         "event_id": "evt_1",
         "event_type": CardEventType.AUTHORIZATION,
         "occurred_at": datetime(2026, 7, 25, 12, 0, tzinfo=UTC),
@@ -174,7 +174,7 @@ def test_dtos_carry_no_secret_material() -> None:
 
 def test_funding_result_reports_a_status_and_both_references() -> None:
     result = FundingResult(
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         card_id="card_1",
         funding_ref="our-intent-id",
         issuer_funding_ref="their-id",

@@ -92,16 +92,24 @@ docker compose exec backend python scripts/demo_phase2.py
 ```
 
 It walks: the registered issuers and their funding models, a card at a
-crypto-deposit issuer (with its assigned EVM deposit address), funding that is
-idempotent under one `funding_ref`, a signed delivery accepted, the same delivery
-ignored as a duplicate, a tampered delivery rejected, an unmodelled event type
-recorded as `unmapped`, and a failing handler retried and then dead-lettered. It
-ends with the ledger and a ready-to-paste `curl` for the HTTP endpoint.
+crypto-deposit issuer (with the Safe address its funds must be sent to), a
+`fund_card` that answers `pending` because no deposit has confirmed yet, the same
+call succeeding once one has — and being idempotent under one `funding_ref` — a
+signed delivery accepted, the same delivery ignored as a duplicate, a tampered
+delivery rejected, an unmodelled event type recorded as `unmapped`, and a failing
+handler retried and then dead-lettered. It ends with the ledger and a
+ready-to-paste `curl` for the HTTP endpoint.
+
+The funding sequence is the part worth watching. At this provider money arrives
+on-chain, so the demo makes the deposit happen on the simulated chain and
+`fund_card` only attributes it — the balance is created by the transfer, never by
+the call. Ask before the deposit confirms and the honest answer is `pending` with
+no issuer reference at all.
 
 ### Card lifecycle over HTTP
 
 ```bash
-export P=localhost:8000/providers/evm_deposit_mock
+export P=localhost:8000/providers/gnosis_pay_mock
 
 curl -s localhost:8000/providers | jq            # who is registered, and how they fund
 
@@ -147,12 +155,16 @@ from app.issuers import registry
 from app.issuers.base import CreateCardholderRequest, CreateCardRequest
 
 async def main():
-    adapter = registry.get_adapter("evm_deposit_mock")
+    adapter = registry.get_adapter("gnosis_pay_mock")
     holder = await adapter.create_cardholder(CreateCardholderRequest(
         email="ada@example.test", first_name="Ada", last_name="Lovelace"))
     card = await adapter.create_card(holder.cardholder_id, CreateCardRequest())
-    d = adapter.simulator.emit_authorization(card.card_id, Money(1299, "USD"))
-    parts = ["curl", "-s", "-X", "POST", "http://localhost:8000/webhooks/evm_deposit_mock"]
+    await adapter.activate_card(card.card_id)
+    # An approved authorization needs a funded Safe, and money arrives on-chain here.
+    adapter.simulator.receive_onchain_deposit(card.deposit_address, Money(5000, "USD"))
+    adapter.simulator.authorize(card.card_id, Money(1299, "USD"))
+    d = adapter.simulator.deliveries[-1]
+    parts = ["curl", "-s", "-X", "POST", "http://localhost:8000/webhooks/gnosis_pay_mock"]
     for k, v in d.headers.items():
         parts += ["-H", f"{k}: {v}"]
     parts += ["--data-binary", d.body.decode()]
@@ -173,7 +185,7 @@ The second call writes nothing, publishes nothing, and re-runs no handlers — i
 just points back at the row it matched. Then try to get something past the door:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/webhooks/evm_deposit_mock -d '{}'
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/webhooks/gnosis_pay_mock -d '{}'
 # 401 — unsigned
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/webhooks/wells_fargo -d '{}'
 # 404 — no such provider
@@ -264,11 +276,11 @@ Two things to watch for:
 
 ### Over HTTP
 
-The same endpoints as phase 2, with `lithic` in place of `evm_deposit_mock`:
+The same endpoints as phase 2, with `lithic` in place of `gnosis_pay_mock`:
 
 ```bash
 curl -s localhost:8000/providers | jq
-# [{"provider_id":"evm_deposit_mock","funding_model":"crypto_deposit"},
+# [{"provider_id":"gnosis_pay_mock","funding_model":"crypto_deposit"},
 #  {"provider_id":"lithic","funding_model":"fiat_rail"}]
 
 curl -s -X POST localhost:8000/providers/lithic/cardholders \

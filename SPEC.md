@@ -156,7 +156,7 @@ Include at least one small native-module touchpoint (e.g., secure storage via Ke
 ## 12. Build phases (each ends green: tests pass, CI passes, demo-able)
 
 1. **Skeleton + ledger + state machine** — repo, docker-compose, models, migrations, `advance()` with full transition tests. No external services yet.
-2. **Issuer abstraction + mock adapter** — base interface, registry, `evm_deposit_mock` with simulator; card lifecycle endpoints; webhook receiver with verify/dedup/dispatch against the mock.
+2. **Issuer abstraction + mock adapter** — base interface, registry, `gnosis_pay_mock` with simulator; card lifecycle endpoints; webhook receiver with verify/dedup/dispatch against the mock.
 3. **Lithic adapter** — real sandbox lifecycle + webhooks + simulated authorizations; contract-test fixtures.
 4. **Stripe Issuing adapter** — proves "second provider = one file"; if any core module needed changes, treat that as a design bug and fix the abstraction.
 5. **Solana watcher + simulated bridge + auto top-up** — full PENDING→FUNDED loop on devnet with the simulated bridge; reconciler + failure injection.

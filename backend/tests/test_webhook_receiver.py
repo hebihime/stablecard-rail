@@ -24,15 +24,14 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.money import Money
 from app.issuers import registry
 from app.issuers.base import CardEvent, CardEventType, CardState
-from app.issuers.evm_deposit_mock import Delivery, EvmDepositMockAdapter
-from app.issuers.evm_deposit_mock.signing import (
-    EVENT_ID_HEADER,
+from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
+from app.issuers.gnosis_pay_mock.signing import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
+    derive_signing_key,
     sign,
 )
 from app.issuers.lithic import LithicAdapter
@@ -42,9 +41,17 @@ from app.webhooks import dispatch
 from app.webhooks.bus import RedisStreamsEventBus
 from app.webhooks.dedup import dedup_key, ledger_idempotency_key
 from app.webhooks.receiver import DeliveryOutcome, SignatureRejected, receive
-from tests.support import StubIssuerAdapter, all_ledger_events, make_mock_card
+from tests.support import (
+    StubIssuerAdapter,
+    all_ledger_events,
+    make_mock_card,
+    mock_authorization,
+)
 
-PROVIDER = "evm_deposit_mock"
+PROVIDER = "gnosis_pay_mock"
+#: The provider's webhook keypair. Named here because one test signs a delivery
+#: by hand, which is the provider's side of an asymmetric scheme.
+SIGNING_KEY = derive_signing_key("receiver-test-provider-key")
 
 
 class Clock:
@@ -63,11 +70,9 @@ def clock() -> Clock:
 
 
 @pytest.fixture
-def adapter(clock: Clock) -> Iterator[EvmDepositMockAdapter]:
+def adapter(clock: Clock) -> Iterator[GnosisPayMockAdapter]:
     """The mock provider on a controlled clock, registered under its real id."""
-    built = EvmDepositMockAdapter(
-        webhook_secret=get_settings().evm_deposit_mock_webhook_secret, clock=clock
-    )
+    built = GnosisPayMockAdapter(signing_key=SIGNING_KEY, clock=clock)
     registry.register(PROVIDER, lambda: built, replace=True)
     yield built
 
@@ -95,16 +100,16 @@ async def deliver(
 
 
 async def test_a_verified_delivery_is_recorded_with_its_provider_payload(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"), merchant="Coffee")
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"), merchant="Coffee")
 
     outcome = await deliver(session, redis_client, delivery)
 
     assert outcome.duplicate is False
     assert outcome.event_type is CardEventType.AUTHORIZATION
-    assert outcome.event_id == delivery.event_id
+    assert outcome.event_id == delivery.derived_event_id
 
     events = await all_ledger_events(session)
     assert len(events) == 1
@@ -115,17 +120,17 @@ async def test_a_verified_delivery_is_recorded_with_its_provider_payload(
     assert recorded.card_id == card_id
     assert recorded.amount_minor == 1299
     assert recorded.currency == "USD"
-    assert recorded.idempotency_key == ledger_idempotency_key(PROVIDER, delivery.event_id)
+    assert recorded.idempotency_key == ledger_idempotency_key(PROVIDER, delivery.derived_event_id)
     # The raw payload is kept verbatim (SPEC.md §7) — normalizing loses nothing.
     assert recorded.payload["raw"] == json.loads(delivery.body)
-    assert recorded.payload["provider_event_type"] == "card.authorization"
+    assert recorded.payload["provider_event_type"] == "card.transaction.created"
 
 
 async def test_the_provider_timestamp_is_preserved_not_the_arrival_time(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter, clock: Clock
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter, clock: Clock
 ) -> None:
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     await deliver(session, redis_client, delivery)
 
@@ -136,11 +141,11 @@ async def test_the_provider_timestamp_is_preserved_not_the_arrival_time(
 
 
 async def test_a_lifecycle_event_records_the_new_card_state(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     card_id = await make_mock_card(adapter)
     await adapter.freeze_card(card_id)
-    delivery = adapter.simulator.emit_card_lifecycle(card_id)
+    delivery = adapter.simulator.emit_card_status_changed(card_id)
 
     outcome = await deliver(session, redis_client, delivery)
 
@@ -151,15 +156,15 @@ async def test_a_lifecycle_event_records_the_new_card_state(
 
 
 async def test_the_event_is_published_on_the_bus(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     outcome = await deliver(session, redis_client, delivery)
 
     published = await RedisStreamsEventBus(redis_client).read()
-    assert [entry.event.event_id for entry in published] == [delivery.event_id]
+    assert [entry.event.event_id for entry in published] == [delivery.derived_event_id]
     assert published[0].stream_id == outcome.stream_id
 
 
@@ -188,12 +193,12 @@ async def test_the_delivery_headers_reach_the_adapter_that_normalizes_it(
 
 
 async def test_an_unsigned_delivery_is_rejected_and_leaves_no_trace(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     # No ledger row for unauthenticated traffic: anyone can POST here, and an
     # attacker must not be able to write to the audit log or fill its keyspace.
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     with pytest.raises(SignatureRejected):
         await receive(session, redis_client, provider_id=PROVIDER, headers={}, body=delivery.body)
@@ -203,10 +208,10 @@ async def test_an_unsigned_delivery_is_rejected_and_leaves_no_trace(
 
 
 async def test_a_tampered_body_is_rejected(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     with pytest.raises(SignatureRejected):
         await receive(
@@ -220,10 +225,10 @@ async def test_a_tampered_body_is_rejected(
 
 
 async def test_a_captured_delivery_stops_verifying_once_it_goes_stale(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter, clock: Clock
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter, clock: Clock
 ) -> None:
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
     clock.now += timedelta(hours=1)
 
     with pytest.raises(SignatureRejected):
@@ -242,7 +247,7 @@ async def test_an_unknown_provider_is_a_lookup_error_not_a_crash(
 
 
 async def test_a_duplicate_delivery_is_a_no_op(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     """SPEC.md §4: duplicate deliveries return 200 with no side effects."""
     seen: list[str] = []
@@ -253,7 +258,7 @@ async def test_a_duplicate_delivery_is_a_no_op(
     dispatch.subscribe(CardEventType.AUTHORIZATION, "recorder", recorder)
 
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     first = await deliver(session, redis_client, delivery)
     second = await deliver(session, redis_client, delivery)
@@ -261,28 +266,28 @@ async def test_a_duplicate_delivery_is_a_no_op(
     assert first.duplicate is False
     assert second.duplicate is True
     assert len(await all_ledger_events(session)) == 1
-    assert seen == [delivery.event_id], "a duplicate must not re-run handlers"
+    assert seen == [delivery.derived_event_id], "a duplicate must not re-run handlers"
     assert await redis_client.xlen("stablecard:card_events") == 1
 
 
 async def test_a_duplicate_points_back_at_the_row_it_matched(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     # The provider gets a 200 either way, but our operators need to tell
     # "already had it, here it is" from "never seen it".
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
     first = await deliver(session, redis_client, delivery)
 
     second = await deliver(session, redis_client, delivery)
-    assert second.event_id == delivery.event_id
+    assert second.event_id == delivery.derived_event_id
     assert second.event_type is CardEventType.AUTHORIZATION
     assert second.ledger_event_id == first.ledger_event_id
     assert second.stream_id is None, "a duplicate is not republished"
 
 
 async def test_dedup_survives_redis_losing_the_key(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     """The durable layer is the ledger's unique index, not Redis (SPEC.md §4).
 
@@ -290,7 +295,7 @@ async def test_dedup_survives_redis_losing_the_key(
     second funding. Flushing the database is what all three look like from here.
     """
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
     await deliver(session, redis_client, delivery)
 
     await redis_client.flushdb()
@@ -303,7 +308,7 @@ async def test_dedup_survives_redis_losing_the_key(
 async def test_a_failure_before_the_ledger_write_gives_the_dedup_claim_back(
     session: AsyncSession,
     redis_client: Redis,
-    adapter: EvmDepositMockAdapter,
+    adapter: GnosisPayMockAdapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """SETNX-first opens a crash window; releasing the claim closes it.
@@ -313,7 +318,7 @@ async def test_a_failure_before_the_ledger_write_gives_the_dedup_claim_back(
     life of the TTL — a day, by default.
     """
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     async def explode(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("database went away")
@@ -322,7 +327,7 @@ async def test_a_failure_before_the_ledger_write_gives_the_dedup_claim_back(
     with pytest.raises(RuntimeError):
         await deliver(session, redis_client, delivery)
 
-    assert await redis_client.exists(dedup_key(PROVIDER, delivery.event_id)) == 0
+    assert await redis_client.exists(dedup_key(PROVIDER, delivery.derived_event_id)) == 0
     assert await all_ledger_events(session) == []
 
     monkeypatch.undo()
@@ -334,14 +339,14 @@ async def test_a_failure_before_the_ledger_write_gives_the_dedup_claim_back(
 async def test_an_unrelated_integrity_error_is_not_mistaken_for_a_duplicate(
     session: AsyncSession,
     redis_client: Redis,
-    adapter: EvmDepositMockAdapter,
+    adapter: GnosisPayMockAdapter,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # The duplicate path is entered by matching the constraint *name*. Treating
     # every IntegrityError as a duplicate would silently swallow real schema
     # violations and answer 200 to an event we never recorded.
     card_id = await make_mock_card(adapter)
-    delivery = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    _, delivery = mock_authorization(adapter, card_id, Money(1299, "USD"))
 
     async def explode(*_args: object, **_kwargs: object) -> None:
         raise IntegrityError("INSERT ...", {}, Exception('violates check constraint "ck_other"'))
@@ -352,7 +357,7 @@ async def test_an_unrelated_integrity_error_is_not_mistaken_for_a_duplicate(
         await deliver(session, redis_client, delivery)
 
     assert await all_ledger_events(session) == []
-    assert await redis_client.exists(dedup_key(PROVIDER, delivery.event_id)) == 0
+    assert await redis_client.exists(dedup_key(PROVIDER, delivery.derived_event_id)) == 0
 
 
 async def test_an_adapter_without_envelope_ids_dedups_on_the_body(
@@ -386,7 +391,7 @@ async def test_a_different_body_from_such_an_adapter_is_a_different_event(
 
 
 async def test_an_unknown_provider_event_is_ledgered_as_unmapped(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter
 ) -> None:
     """SPEC.md §3.3: unknown provider events are never dropped silently."""
     delivery = adapter.simulator.emit_unknown(
@@ -403,27 +408,25 @@ async def test_an_unknown_provider_event_is_ledgered_as_unmapped(
 
 
 async def test_an_unreadable_body_is_ledgered_rather_than_retried_forever(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter, clock: Clock
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter, clock: Clock
 ) -> None:
     # The signature proves the delivery is genuine, so redelivery cannot fix it.
     # Recording it as unmapped preserves the evidence *and* stops the loop.
-    event_id = "evt_malformed"
+    # Signed by hand, with the provider's private key, because no simulator method
+    # emits a broken body.
     body = b"{this is not json"
     timestamp = str(int(clock.now.timestamp()))
     headers = {
         TIMESTAMP_HEADER: timestamp,
-        EVENT_ID_HEADER: event_id,
-        SIGNATURE_HEADER: sign(
-            get_settings().evm_deposit_mock_webhook_secret,
-            timestamp=timestamp,
-            event_id=event_id,
-            body=body,
-        ),
+        SIGNATURE_HEADER: sign(SIGNING_KEY, timestamp=timestamp, body=body),
     }
 
     outcome = await receive(session, redis_client, provider_id=PROVIDER, headers=headers, body=body)
 
     assert outcome.event_type is CardEventType.UNMAPPED
+    # No id in the envelope to key on, so the digest of the bytes is the id — which
+    # still works when those bytes are not JSON.
+    assert outcome.event_id == hashlib.sha256(body).hexdigest()
     recorded = (await all_ledger_events(session))[0]
     assert recorded.event_type == "provider.unmapped"
     assert "not JSON" in recorded.payload["parse_error"]
@@ -446,7 +449,7 @@ async def test_an_unreadable_body_is_still_deduplicated(
 
 
 async def test_out_of_order_deliveries_keep_both_orders_readable(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter, clock: Clock
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter, clock: Clock
 ) -> None:
     """SPEC.md §10: out-of-order events.
 
@@ -455,9 +458,10 @@ async def test_out_of_order_deliveries_keep_both_orders_readable(
     basis — a settlement arriving before its authorization is normal.
     """
     card_id = await make_mock_card(adapter)
-    earlier = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
+    thread_id, earlier = mock_authorization(adapter, card_id, Money(1299, "USD"))
     clock.now += timedelta(seconds=30)
-    later = adapter.simulator.emit_settlement(card_id, Money(1299, "USD"))
+    # The clearing of that same authorization, which is what a settlement is here.
+    later = adapter.simulator.clear(thread_id)
 
     # Delivered newest-first, as a retrying provider might.
     await deliver(session, redis_client, later)
@@ -469,17 +473,20 @@ async def test_out_of_order_deliveries_keep_both_orders_readable(
         "provider.authorization",
     ], "arrival order is preserved: the ledger is append-only"
     assert events[0].occurred_at > events[1].occurred_at
-    assert [event.payload["raw"]["id"] for event in events] == [later.event_id, earlier.event_id]
+    # No provider id in the envelope, so the idempotency key carries the derived one.
+    assert [event.idempotency_key for event in events] == [
+        ledger_idempotency_key(PROVIDER, later.derived_event_id),
+        ledger_idempotency_key(PROVIDER, earlier.derived_event_id),
+    ]
 
 
 async def test_events_for_one_card_read_back_as_a_history(
-    session: AsyncSession, redis_client: Redis, adapter: EvmDepositMockAdapter, clock: Clock
+    session: AsyncSession, redis_client: Redis, adapter: GnosisPayMockAdapter, clock: Clock
 ) -> None:
     card_id = await make_mock_card(adapter)
-    authorization = adapter.simulator.emit_authorization(card_id, Money(1299, "USD"))
-    authorization_id = json.loads(authorization.body)["data"]["authorization_id"]
+    thread_id, authorization = mock_authorization(adapter, card_id, Money(1299, "USD"))
     clock.now += timedelta(seconds=1)
-    reversal = adapter.simulator.emit_authorization_reversal(authorization_id)
+    reversal = adapter.simulator.reverse(thread_id)
 
     for delivery in (authorization, reversal):
         await deliver(session, redis_client, delivery)

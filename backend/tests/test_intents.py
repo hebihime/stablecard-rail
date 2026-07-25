@@ -16,7 +16,7 @@ from tests.support import ledger_for_intent
 async def test_new_intent_starts_pending_and_is_ledgered(session: AsyncSession) -> None:
     intent = await create_intent(
         session,
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         card_id="card_abc",
         amount=Money(2500, "USD"),
     )
@@ -37,7 +37,7 @@ async def test_new_intent_starts_pending_and_is_ledgered(session: AsyncSession) 
 async def test_amount_is_persisted_as_integer_minor_units(session: AsyncSession) -> None:
     intent = await create_intent(
         session,
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         card_id="card_abc",
         amount=Money(1, "USD"),
     )
@@ -50,7 +50,7 @@ async def test_zero_or_negative_funding_amounts_are_rejected(session: AsyncSessi
         with pytest.raises(ValueError, match="positive"):
             await create_intent(
                 session,
-                provider_id="evm_deposit_mock",
+                provider_id="gnosis_pay_mock",
                 card_id="card_abc",
                 amount=Money(bad, "USD"),
             )
@@ -62,7 +62,7 @@ async def test_deposit_reference_is_unique_so_a_replayed_deposit_makes_one_inten
 ) -> None:
     await create_intent(
         session,
-        provider_id="evm_deposit_mock",
+        provider_id="gnosis_pay_mock",
         card_id="card_abc",
         amount=Money(2500, "USD"),
         deposit_tx_ref="5xTxSignature",
@@ -70,7 +70,7 @@ async def test_deposit_reference_is_unique_so_a_replayed_deposit_makes_one_inten
     with pytest.raises(IntegrityError):
         await create_intent(
             session,
-            provider_id="evm_deposit_mock",
+            provider_id="gnosis_pay_mock",
             card_id="card_abc",
             amount=Money(2500, "USD"),
             deposit_tx_ref="5xTxSignature",

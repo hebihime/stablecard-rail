@@ -72,7 +72,7 @@ def adapter() -> LithicAdapter:
 
 
 def test_the_adapter_declares_itself_a_fiat_rail_issuer(adapter: LithicAdapter) -> None:
-    # The other half of the taxonomy from `evm_deposit_mock` (SPEC.md §3.2), which
+    # The other half of the taxonomy from `gnosis_pay_mock` (SPEC.md §3.2), which
     # is the reason both exist.
     assert "lithic" == adapter.provider_id
     assert FundingModel.FIAT_RAIL is adapter.funding_model

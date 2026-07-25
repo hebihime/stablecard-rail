@@ -38,7 +38,7 @@ async def main() -> None:
     async with sessionmaker() as session:
         intent = await create_intent(
             session,
-            provider_id="evm_deposit_mock",
+            provider_id="gnosis_pay_mock",
             card_id="card_demo_1",
             amount=Money(2500, "USD"),
             deposit_tx_ref=f"demo-deposit-{asyncio.get_running_loop().time():.6f}",

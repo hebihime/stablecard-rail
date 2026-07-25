@@ -65,7 +65,7 @@ def test_there_is_something_to_check() -> None:
     # A path typo would make every test below vacuously pass.
     assert len(outside_issuers()) > 5
     assert PUBLIC_ISSUER_MODULES <= issuer_modules()
-    assert "app.issuers.evm_deposit_mock" in issuer_modules()
+    assert "app.issuers.gnosis_pay_mock" in issuer_modules()
 
 
 @pytest.mark.parametrize("path", outside_issuers(), ids=lambda p: str(p.name))

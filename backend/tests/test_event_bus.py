@@ -20,7 +20,7 @@ from app.webhooks.bus import EventBus, RedisStreamsEventBus
 
 def make_event(**overrides: object) -> CardEvent:
     defaults: dict[str, object] = {
-        "provider_id": "evm_deposit_mock",
+        "provider_id": "gnosis_pay_mock",
         "event_id": "evt_000001",
         "event_type": CardEventType.SETTLEMENT,
         "occurred_at": datetime(2026, 7, 25, 12, 0, 0, 123456, tzinfo=UTC),

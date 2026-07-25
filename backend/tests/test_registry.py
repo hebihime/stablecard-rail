@@ -12,33 +12,33 @@ import pytest
 
 from app.issuers import registry
 from app.issuers.base import CardIssuerAdapter, FundingModel
-from app.issuers.evm_deposit_mock import EvmDepositMockAdapter
+from app.issuers.gnosis_pay_mock import GnosisPayMockAdapter
 from tests.support import StubIssuerAdapter
 
 
 def test_the_mock_adapter_is_registered_by_importing_the_package() -> None:
     # The "registry entry" half of "one adapter file + one registry entry".
-    assert "evm_deposit_mock" in registry.known_providers()
+    assert "gnosis_pay_mock" in registry.known_providers()
 
 
 def test_get_adapter_returns_the_interface_type() -> None:
-    adapter = registry.get_adapter("evm_deposit_mock")
+    adapter = registry.get_adapter("gnosis_pay_mock")
     assert isinstance(adapter, CardIssuerAdapter)
-    assert adapter.provider_id == "evm_deposit_mock"
+    assert adapter.provider_id == "gnosis_pay_mock"
     assert adapter.funding_model is FundingModel.CRYPTO_DEPOSIT
 
 
 def test_adapters_are_singletons_per_process() -> None:
     # The mock holds simulator state in memory; two instances would mean a card
     # created through one is invisible to the other.
-    assert registry.get_adapter("evm_deposit_mock") is registry.get_adapter("evm_deposit_mock")
+    assert registry.get_adapter("gnosis_pay_mock") is registry.get_adapter("gnosis_pay_mock")
 
 
 def test_unknown_provider_raises_a_typed_error_naming_what_is_available() -> None:
     with pytest.raises(registry.UnknownProviderError) as caught:
         registry.get_adapter("wells_fargo")
     assert "wells_fargo" in str(caught.value)
-    assert "evm_deposit_mock" in str(caught.value)
+    assert "gnosis_pay_mock" in str(caught.value)
     assert caught.value.provider_id == "wells_fargo"
 
 
@@ -81,7 +81,7 @@ def test_describe_exposes_the_funding_model_taxonomy() -> None:
     # Mobile and the demo need to know a provider's funding model without
     # importing any adapter (SPEC.md §3.2: proving both models are covered).
     described = dict(registry.describe())
-    assert described["evm_deposit_mock"] is FundingModel.CRYPTO_DEPOSIT
+    assert described["gnosis_pay_mock"] is FundingModel.CRYPTO_DEPOSIT
     assert described["lithic"] is FundingModel.FIAT_RAIL
 
 
@@ -109,13 +109,13 @@ def test_a_provider_with_no_credentials_configured_still_registers(
 
 
 def test_registrations_survive_an_instance_reset_but_instances_do_not() -> None:
-    first = registry.get_adapter("evm_deposit_mock")
+    first = registry.get_adapter("gnosis_pay_mock")
     registry.reset_instances()
-    assert "evm_deposit_mock" in registry.known_providers()
-    assert registry.get_adapter("evm_deposit_mock") is not first
+    assert "gnosis_pay_mock" in registry.known_providers()
+    assert registry.get_adapter("gnosis_pay_mock") is not first
 
 
 def test_the_mock_adapter_can_be_built_straight_from_settings() -> None:
     # The factory the package registers, called directly.
-    adapter = EvmDepositMockAdapter.from_settings()
-    assert isinstance(adapter, EvmDepositMockAdapter)
+    adapter = GnosisPayMockAdapter.from_settings()
+    assert isinstance(adapter, GnosisPayMockAdapter)
