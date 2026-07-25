@@ -669,10 +669,6 @@ Recorded here when their phase lands, per SPEC.md §11:
   `cardholder_verification_required` declines (§8.10). Stripe wants a decision inside
   two seconds; this pipeline verifies, dedups and queues (SPEC.md §4), so serving it
   would be a second, synchronous webhook path — a production-path feature, not a gap.
-- **`disable_existing_loggers=False` in `alembic/env.py`.** Running migrations
-  currently switches off every logger the app created at import time, so no adapter's
-  fail-closed webhook warning is observable from a test (§8.9). One line, found in
-  phase 4, outside phase 4's permitted diff.
 - **Book-transfer funding** for a ledger-enabled Lithic program, replacing the memo
   tag with provider-side idempotency (§4.4, §4.5). Needs a program this sandbox does
   not have.
@@ -1110,12 +1106,11 @@ that endpoint down for the providers that do have one.
 `checked_api_key` runs on the request path, where the failure can name
 `STRIPE_ISSUING_API_KEY`.
 
-**This is a finding about phase 3, not just a decision about phase 4.**
-`lithic/client.py` validates its key in the constructor, so `registry.describe()` —
-and `test_registry.py`'s test of it, and `GET /providers` — already depend on
-`LITHIC_API_KEY` being set. That passes locally because a key is configured; it
-would fail in CI. Left alone rather than fixed here: it is phase 3's behaviour and
-changing it is not what this phase is for.
+**This started as a finding about phase 3.** `lithic/client.py` validated its key in
+the constructor, so `registry.describe()` — and `test_registry.py`'s test of it, and
+`GET /providers` — depended on `LITHIC_API_KEY` being set: green locally, red in CI.
+Reported rather than fixed during phase 4, because `lithic/` was outside the permitted
+diff and was itself under review. **Fixed afterwards** — see §8.11.
 
 The lazy build is also why `config.py` defaults credentials to empty rather than to a
 value, and why `client.py` still opens one `httpx.AsyncClient` per request. §5 listed
@@ -1184,14 +1179,13 @@ things that had been assumptions. The claim in §8's preamble is unaffected: the
 adapter absorbed everything, and the fixes were all inside its own package.
 
 A defect found on the way, in test infrastructure rather than in the adapter:
-`alembic/env.py` calls `fileConfig(config.config_file_name)` with the default
+`alembic/env.py` called `fileConfig(config.config_file_name)` with the default
 `disable_existing_loggers=True`. The session-scoped migration fixture therefore
-switches off every logger the app created at import time, so **both adapters'
-fail-closed webhook warnings are invisible to the entire suite** — which is why
-`lithic/adapter.py`'s equivalent warning has never been observed by a test.
-`test_an_unconfigured_endpoint_fails_closed` re-enables its own logger and says why.
-The fix is `disable_existing_loggers=False`, one line in `alembic/env.py`; not taken
-here because it is outside this phase's diff.
+switched off every logger the app created at import time, so **both adapters'
+fail-closed webhook warnings were invisible to the entire suite** — which is why
+`lithic/adapter.py`'s equivalent warning had never been observed by a test. Reported
+rather than fixed during the phase, because `alembic/` is phase 1's; **fixed
+afterwards** — see §8.11.
 
 ### 8.10 What a live account changed
 
@@ -1268,3 +1262,48 @@ acceptance; and it **wrote fixtures from responses it had not asked for**, so an
 unexpected 400 replaced a good fixture with an error body — after which the suite would
 have passed against a recording of our own bug. `Recorder.call` now writes only when the
 status matches `expect`, and says out loud when it does not.
+
+### 8.11 The two findings phase 4 reported, fixed afterwards
+
+Phase 4 ran under a hard "no diffs outside `issuers/` and the registry" constraint, so
+two defects it found in *other* phases' code were written down rather than repaired
+(§8.6, §8.9). Both are now fixed, each in its own commit, once that constraint was
+lifted. Recording them here because the reasoning in each case is about *where* a check
+belongs, which is a decision the next adapter will face too.
+
+**`alembic/env.py` disabled every app logger.** `fileConfig(config.config_file_name)`
+defaults to `disable_existing_loggers=True`, and the session-scoped `migrated_database`
+fixture runs migrations *after* `app.*` is imported — so every logger the app had
+created was switched off for the rest of the session. The symptom was specific and
+misleading: `caplog.text` came back empty while the same call logged correctly outside
+pytest.
+
+What it hid: `verify_webhook` returns a bare `False`, so the warning naming the missing
+secret is the **only** thing separating "this delivery was forged" from "you never
+configured an endpoint secret". Neither adapter's version of that warning had ever been
+observed by a test. Both now are, and `test_stripe_webhooks.py` losing its
+`monkeypatch.setattr(logger, "disabled", False)` workaround is the regression test —
+if migrations ever switch app loggers off again, that test fails.
+
+**`lithic/client.py` validated its API key in the constructor**, which made
+`registry.describe()` — and therefore `GET /providers` — depend on `LITHIC_API_KEY`
+being present. Green on a machine with credentials, red in CI. Demonstrated by putting
+the old check back with `.env` moved aside: three tests fail, one of them the route
+test itself.
+
+The interesting part is *why* it was written that way, because it was a deliberate
+choice rather than an oversight: by analogy with the webhook-secret check in
+`lithic/adapter.py`, which really should be eager. **The analogy does not hold, and the
+distinction is worth keeping:**
+
+| | Empty webhook secret | Empty API key |
+| --- | --- | --- |
+| How it fails without an early check | silently, as "invalid signature" on every genuine delivery | loudly, as a 401 saying "Please provide a valid API key" |
+| Where it sends the person debugging | Lithic's dashboard — the wrong system | `.env` — the right one |
+| So the early check buys | a correctly attributed error | nothing |
+| And costs | nothing | `GET /providers`, for every provider |
+
+So: **validate eagerly when the failure would otherwise be silent or misattributed;
+validate on the request path when it would not.** The Stripe adapter was written to that
+rule from the start (§8.6), which is how the Lithic version came to light at all —
+building the second adapter is what made the first one's placement visible as a choice.
