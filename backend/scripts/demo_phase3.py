@@ -34,7 +34,6 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.db import get_sessionmaker
 from app.core.money import Money
 from app.core.redis import get_redis_client
@@ -42,6 +41,7 @@ from app.issuers import registry
 from app.issuers.base import CreateCardholderRequest, CreateCardRequest
 from app.issuers.lithic import LithicAdapter
 from app.issuers.lithic.client import LithicClient
+from app.issuers.lithic.config import get_lithic_settings
 from app.issuers.lithic.signing import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
@@ -82,15 +82,15 @@ async def wait_for(client: LithicClient, token: str, wanted: str) -> dict[str, A
 
 async def main() -> int:
     logging.basicConfig(level=logging.CRITICAL)
-    settings = get_settings()
-    if not settings.lithic_api_key:
+    settings = get_lithic_settings()
+    if not settings.api_key:
         print("LITHIC_API_KEY is not set — see .env.example", file=sys.stderr)
         return 2
 
     client = LithicClient(
-        base_url=settings.lithic_api_base_url,
-        api_key=settings.lithic_api_key,
-        timeout=settings.lithic_request_timeout_seconds,
+        base_url=settings.api_base_url,
+        api_key=settings.api_key,
+        timeout=settings.request_timeout_seconds,
     )
     # Registered with a known webhook secret so the replay below can be verified.
     adapter = LithicAdapter(client=client, webhook_secret=DEMO_SECRET)

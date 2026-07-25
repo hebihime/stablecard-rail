@@ -33,7 +33,6 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.money import Money
 from app.issuers.base import (
     Card,
@@ -54,6 +53,7 @@ from app.issuers.base import (
     WebhookParseError,
 )
 from app.issuers.lithic.client import LithicApiError, LithicClient
+from app.issuers.lithic.config import get_lithic_settings
 from app.issuers.lithic.signing import (
     DEFAULT_TOLERANCE_SECONDS,
     TIMESTAMP_HEADER,
@@ -166,16 +166,20 @@ class LithicAdapter(CardIssuerAdapter):
 
     @classmethod
     def from_settings(cls) -> LithicAdapter:
-        """The factory the registry holds (see `app/issuers/__init__.py`)."""
-        settings = get_settings()
+        """The factory the registry holds (see `app/issuers/__init__.py`).
+
+        Reads `LithicSettings`, which this package declares — nothing in
+        `app/core/` knows this provider exists (`config.py`).
+        """
+        settings = get_lithic_settings()
         return cls(
             client=LithicClient(
-                base_url=settings.lithic_api_base_url,
-                api_key=settings.lithic_api_key,
-                timeout=settings.lithic_request_timeout_seconds,
+                base_url=settings.api_base_url,
+                api_key=settings.api_key,
+                timeout=settings.request_timeout_seconds,
             ),
-            webhook_secret=settings.lithic_webhook_secret,
-            signature_tolerance_seconds=settings.webhook_signature_tolerance_seconds,
+            webhook_secret=settings.webhook_secret,
+            signature_tolerance_seconds=settings.signature_tolerance_seconds,
         )
 
     # --------------------------------------------------------- cardholders ----

@@ -97,10 +97,10 @@ def test_a_provider_with_no_credentials_configured_still_registers(
     # Registration is by factory, so an environment without Lithic credentials boots
     # and serves the mock provider; only a call that needs a key fails, and it names
     # the variable (docs/ARCHITECTURE.md §3.1).
-    from app.core import config
     from app.issuers.lithic import adapter as lithic_adapter
+    from app.issuers.lithic.config import LithicSettings
 
-    monkeypatch.setattr(lithic_adapter, "get_settings", lambda: config.Settings(lithic_api_key=""))
+    monkeypatch.setattr(lithic_adapter, "get_lithic_settings", lambda: LithicSettings(api_key=""))
     registry.reset_instances()
 
     assert "lithic" in registry.known_providers()

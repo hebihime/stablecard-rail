@@ -129,6 +129,103 @@ def test_no_adapter_imports_another_adapter(path: Path) -> None:
     )
 
 
+# ------------------------------------------------- the coupling that hid ----
+# The tests above read the import graph, and for a year that looked like enough.
+# It was not: adapter configuration lived in `app/core/config.py` as fields named
+# after each provider (`lithic_api_key`, `evm_deposit_mock_webhook_secret`), and
+# the coupling ran adapter -> `get_settings()` -> a field named after the adapter.
+# No import of an adapter anywhere, so nothing here fired — while "adding an
+# issuer is one adapter file plus one registry entry" was quietly false, and a
+# dead field for a deleted adapter sat in `core/` read by nobody. These two tests
+# close it from both ends.
+
+CORE_CONFIG = APP_ROOT / "core" / "config.py"
+
+#: Tokens from adapter package names that are too generic to accuse a core field
+#: over. `mock` says nothing about *which* provider; `gnosis`, `pay`, `lithic`,
+#: `stripe`, `issuing` all do.
+GENERIC_NAME_TOKENS = frozenset({"mock"})
+
+
+def settings_field_names(path: Path) -> set[str]:
+    """Annotated attribute names of every class in one module."""
+    tree = ast.parse(path.read_text(), filename=str(path))
+    return {
+        node.target.id
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef)
+        for node in cls.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+    }
+
+
+def adapter_name_tokens() -> set[str]:
+    """`app.issuers.gnosis_pay_mock` -> {"gnosis", "pay"}; the generic bits dropped."""
+    tokens: set[str] = set()
+    for package in adapter_packages():
+        tokens |= set(package.split(".")[-1].split("_")) - GENERIC_NAME_TOKENS
+    return tokens
+
+
+def test_the_config_guard_has_something_to_read() -> None:
+    # Both helpers fail open — an empty field set or an empty token set would make
+    # the test below pass without checking anything.
+    assert len(settings_field_names(CORE_CONFIG)) > 3
+    assert {"lithic", "gnosis"} <= adapter_name_tokens()
+
+
+def test_core_config_declares_no_adapter_specific_fields() -> None:
+    named = {
+        field: token
+        for field in settings_field_names(CORE_CONFIG)
+        for token in adapter_name_tokens()
+        if token in field.split("_")
+    }
+    assert not named, (
+        f"app/core/config.py declares {sorted(named)}, named after "
+        f"{sorted(set(named.values()))}. A provider's configuration belongs to that "
+        f"provider's package (app/issuers/<name>/config.py, with its own env prefix): "
+        f"a field here is a change to core/ for every new issuer, and it outlives the "
+        f"adapter it was named for."
+    )
+
+
+@pytest.mark.parametrize("path", python_files(ISSUERS_ROOT), ids=lambda p: str(p.name))
+def test_no_adapter_reads_core_settings(path: Path) -> None:
+    # The structural half: an adapter that cannot see `app.core.config` cannot add
+    # a field to it. `app.core.money` and the rest of `core/` stay available —
+    # `Money` is shared vocabulary, whereas settings are ownership.
+    leaked = {name for name in imported_modules(path) if name.startswith("app.core.config")}
+    assert not leaked, (
+        f"{path.relative_to(APP_ROOT.parent)} imports {sorted(leaked)}. Adapters own "
+        f"their own settings; reading the app's is how a provider-specific field ends "
+        f"up in core/."
+    )
+
+
+def test_each_adapter_that_needs_configuration_declares_its_own() -> None:
+    # Not every adapter needs settings, but one that does must declare them itself.
+    for package in adapter_packages():
+        config = APP_ROOT.parent / Path(package.replace(".", "/")) / "config.py"
+        if not config.exists():
+            continue
+        prefixes = [
+            node.value.value
+            for node in ast.walk(ast.parse(config.read_text()))
+            if isinstance(node, ast.keyword)
+            and node.arg == "env_prefix"
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ]
+        assert prefixes, f"{config} declares settings without an env_prefix"
+        expected = f"{package.split('.')[-1].upper()}_"
+        assert prefixes == [expected], (
+            f"{config} uses env prefix {prefixes} but the package is named "
+            f"{package.split('.')[-1]}; two adapters sharing a prefix would read each "
+            f"other's variables."
+        )
+
+
 def test_the_funding_machine_depends_only_on_core_and_itself() -> None:
     # Phase 1's invariant, still true: the state machine has no idea providers
     # exist. Phase 5 will make it call adapters through the registry — and nothing

@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from app.core.config import get_settings
 from app.core.money import Money
 from app.issuers.base import (
     Card,
@@ -40,6 +39,7 @@ from app.issuers.base import (
     IssuerError,
     WebhookParseError,
 )
+from app.issuers.gnosis_pay_mock.config import get_gnosis_pay_mock_settings
 from app.issuers.gnosis_pay_mock.signing import (
     DEFAULT_TOLERANCE_SECONDS,
     TIMESTAMP_HEADER,
@@ -122,12 +122,13 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
     def from_settings(cls) -> GnosisPayMockAdapter:
         """The factory the registry holds (see `app/issuers/__init__.py`).
 
-        Reads only settings every adapter shares. This provider needs no
-        configuration of its own, which is the point: adding it cost no change to
-        `app/core/config.py`.
+        Reads `GnosisPayMockSettings`, which is almost empty: a simulator in this
+        process has no credentials to configure. Adding this provider still cost
+        no change to `app/core/config.py` — now structurally, not by luck
+        (`config.py`).
         """
-        settings = get_settings()
-        return cls(signature_tolerance_seconds=settings.webhook_signature_tolerance_seconds)
+        settings = get_gnosis_pay_mock_settings()
+        return cls(signature_tolerance_seconds=settings.signature_tolerance_seconds)
 
     @property
     def simulator(self) -> GnosisPaySimulator:

@@ -23,7 +23,6 @@ import httpx
 import pytest
 import respx
 
-from app.core.config import Settings
 from app.core.money import Money
 from app.issuers.base import (
     CardNotFoundError,
@@ -37,6 +36,7 @@ from app.issuers.base import (
 from app.issuers.lithic import LithicAdapter
 from app.issuers.lithic import adapter as adapter_module
 from app.issuers.lithic.client import LithicClient
+from app.issuers.lithic.config import LithicSettings
 
 BASE_URL = "https://sandbox.lithic.test/v1"
 API_KEY = "test-sandbox-key-not-a-real-credential"
@@ -482,23 +482,23 @@ async def test_a_provider_failure_we_cannot_classify_stays_a_provider_failure(
 
 
 def configure(monkeypatch: pytest.MonkeyPatch, **overrides: object) -> None:
-    """Point `from_settings` at an explicit Settings, whatever `.env` holds."""
+    """Point `from_settings` at explicit settings, whatever `.env` holds.
+
+    Patches the *importing* module's attribute: `adapter.py` did
+    `from ... import get_lithic_settings`, so patching the config module would not
+    be seen.
+    """
     monkeypatch.setattr(
         adapter_module,
-        "get_settings",
-        lambda: Settings(**overrides),  # type: ignore[arg-type]
+        "get_lithic_settings",
+        lambda: LithicSettings(**overrides),  # type: ignore[arg-type]
     )
 
 
 def test_from_settings_builds_against_the_configured_sandbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    configure(
-        monkeypatch,
-        lithic_api_key=API_KEY,
-        lithic_api_base_url=BASE_URL,
-        lithic_webhook_secret=WEBHOOK_SECRET,
-    )
+    configure(monkeypatch, api_key=API_KEY, api_base_url=BASE_URL, webhook_secret=WEBHOOK_SECRET)
 
     built = LithicAdapter.from_settings()
 
@@ -509,7 +509,7 @@ def test_from_settings_refuses_to_build_without_a_key(monkeypatch: pytest.Monkey
     # Phases 1-2 and the mock provider must keep working on a machine with no Lithic
     # credentials at all, so this fails at the one call that needs them and nowhere
     # earlier.
-    configure(monkeypatch, lithic_api_key="")
+    configure(monkeypatch, api_key="")
 
     with pytest.raises(ValueError, match="LITHIC_API_KEY"):
         LithicAdapter.from_settings()
@@ -517,7 +517,14 @@ def test_from_settings_refuses_to_build_without_a_key(monkeypatch: pytest.Monkey
 
 def test_the_base_url_defaults_to_the_sandbox() -> None:
     # A misconfigured environment must not be able to reach production by omission.
-    assert "sandbox.lithic.com" in Settings(lithic_api_key=API_KEY).lithic_api_base_url
+    assert "sandbox.lithic.com" in LithicSettings(api_key=API_KEY).api_base_url
+
+
+def test_the_env_prefix_keeps_the_variable_names_the_operator_already_knows() -> None:
+    # The field is `api_key`, but the variable stays `LITHIC_API_KEY`: moving this
+    # config out of core/ is an internal ownership change, not a migration anyone
+    # deploying has to perform.
+    assert "LITHIC_" == LithicSettings.model_config["env_prefix"]
 
 
 @respx.mock

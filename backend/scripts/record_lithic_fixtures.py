@@ -36,7 +36,7 @@ from typing import Any
 
 import httpx
 
-from app.core.config import get_settings
+from app.issuers.lithic.config import get_lithic_settings
 
 FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "lithic"
 
@@ -343,30 +343,28 @@ async def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="walk the API, write no files")
     args = parser.parse_args()
 
-    settings = get_settings()
-    if not settings.lithic_api_key:
+    settings = get_lithic_settings()
+    if not settings.api_key:
         print("LITHIC_API_KEY is not set — see .env.example", file=sys.stderr)
         return 2
-    if "sandbox" not in settings.lithic_api_base_url:
+    if "sandbox" not in settings.api_base_url:
         print(
-            f"refusing to record against {settings.lithic_api_base_url!r}: "
+            f"refusing to record against {settings.api_base_url!r}: "
             f"this script creates cards and simulates transactions",
             file=sys.stderr,
         )
         return 2
 
-    print(f"recording against {settings.lithic_api_base_url}")
+    print(f"recording against {settings.api_base_url}")
     async with httpx.AsyncClient(
-        base_url=settings.lithic_api_base_url,
-        headers={"Authorization": settings.lithic_api_key, "Accept": "application/json"},
-        timeout=settings.lithic_request_timeout_seconds,
+        base_url=settings.api_base_url,
+        headers={"Authorization": settings.api_key, "Accept": "application/json"},
+        timeout=settings.request_timeout_seconds,
     ) as client:
         rec = Recorder(client, dry_run=args.dry_run)
         await walk(rec)
         print("\nunauthenticated request")
-        await record_unauthorized(
-            settings.lithic_api_base_url, settings.lithic_request_timeout_seconds, rec
-        )
+        await record_unauthorized(settings.api_base_url, settings.request_timeout_seconds, rec)
 
     where = "(dry run, nothing written)" if args.dry_run else str(FIXTURES)
     print(f"\n{len(rec.written)} fixtures {where}")
