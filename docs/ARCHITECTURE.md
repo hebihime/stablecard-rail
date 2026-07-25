@@ -1451,3 +1451,76 @@ The four modes are the four shapes a real bridge fails in, and `STUCK` is the on
 worth having — accepted, then silence. Nothing distinguishes a stuck transfer from
 a slow one except elapsed time, which is the entire argument for SPEC.md §5.3's
 reconciler, and this is what lets the reconciler be tested rather than asserted.
+
+### 9.5 Polling with a cursor, not a websocket subscription
+
+SPEC.md §5.2 allows either and prefers a websocket subscription "if
+straightforward". It is not, and the reason is worth stating because it looks like
+the modern choice.
+
+`logsSubscribe` delivers at most once, over a connection that can drop without
+saying so, and offers no way to ask what was missed while it was down. Every
+production deployment of it ends up with a polling reconciler behind it anyway — at
+which point the subscription is a latency optimisation on top of the thing that
+actually guarantees delivery. A poll with a persisted cursor answers "what happened
+since X?" every time it runs, which is the property a funding pipeline needs. And
+the latency argument is weak here specifically: this watcher waits for `finalized`
+commitment (SPEC.md §5.2), so it is already seconds behind by design.
+
+**The cursor moves after the work, never before.** The caller creates the funding
+intents, then advances the cursor, in that order — so a crash in between re-observes
+deposits rather than losing them. Re-observing is safe because
+`funding_intents.deposit_tx_ref` is unique: the second attempt to open an intent for
+the same signature is refused by the database. At-least-once plus a unique key is
+exactly-once effect, the same bargain §2.4 makes for webhook deliveries.
+
+Two smaller decisions fall out of that:
+
+- **A cursor cannot rewind.** Nothing in the loop should try, but a cursor that can
+  move backwards is a cursor that can re-credit a card, and making it impossible is
+  cheaper than auditing every caller.
+- **An unreadable transaction stops the page** rather than being skipped. A
+  signature appears in the index before the transaction is fetchable; skipping it
+  would step the cursor past a deposit that is seconds from appearing, and since the
+  cursor is passed back as `until`, the node would never be asked about it again.
+
+### 9.6 A deposit is a balance difference, not a parsed instruction
+
+The watcher does not read instructions. It finds the watched account in the
+transaction's account list and subtracts its `preTokenBalances` entry from its
+`postTokenBalances` entry.
+
+That is correct for a plain `transfer`, a `transferChecked`, a `mintTo`, and a
+transfer made three programs deep inside a CPI — none of which look alike to a
+parser, and all of which are money arriving. An instruction parser would have to
+keep up with every program that can move tokens; a balance diff does not care which
+one did.
+
+Three things the recorded devnet fixtures settled, each of which is a bug if guessed
+(`backend/tests/fixtures/solana/README.md` has the evidence):
+
+| The trap | What actually happens |
+| --- | --- |
+| A failed transaction carries no balances | It carries `postTokenBalances` — the simulated ones from before it failed. Check `err` first, or credit money that never moved. |
+| A new account has a zero `pre` balance | It has **no `preTokenBalances` entry at all**. Missing must read as zero, or every card's opening deposit is invisible. |
+| `uiAmount` is the amount | `uiAmount` is a **float**. The integer string beside it is the amount, and nothing here ever reads the float (§2.8). |
+
+### 9.7 Six decimals into two, and what is left over
+
+USDC has six decimals; a USD card has two. So 1.000000 USDC is 1_000_000 base units
+and 100 minor units, and the conversion is an integer division by 10^(6−2) — never a
+float, never a `Decimal` rounding mode.
+
+It **truncates**, and the remainder is kept. Crediting a cent that did not arrive is
+how a funding pipeline goes short, so a deposit of 1.234567 USDC funds 123 cents and
+records 4_567 base units of dust on the intent. A deposit below one cent funds
+nothing at all and is reported as ignored rather than dropped: opening an intent for
+zero would fail the `amount_minor > 0` constraint the state machine has had since
+phase 1, and failing it quietly at the database is worse than refusing it out loud
+in the watcher.
+
+**Everything that touches the address and is not a deposit is still accounted for.**
+`DepositPage` carries an `ignored` list with a reason per signature — failed on
+chain, wrong mint, outgoing, below a cent, not ours. It is the same principle as
+ledgering `unmapped` webhooks (§3.9): "nothing happened" and "we decided nothing
+happened" are different, and only one of them can be audited.
