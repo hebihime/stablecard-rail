@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
 from app.core.money import Money
 from app.issuers.base import (
     CardholderNotFoundError,
@@ -47,6 +49,8 @@ from app.issuers.base import (
 from app.issuers.gnosis_pay_mock.signing import (
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
+    derive_signing_key,
+    public_key_document,
     sign,
 )
 
@@ -327,11 +331,14 @@ class GnosisPaySimulator:
     def __init__(
         self,
         *,
-        webhook_secret: str,
+        signing_key: Ed25519PrivateKey | None = None,
         clock: Callable[[], datetime] | None = None,
         program: str = "stablecard-demo",
     ) -> None:
-        self._secret = webhook_secret
+        #: The private half of the webhook keypair. Only the provider holds one —
+        #: the adapter verifies with the published public half, exactly as a
+        #: partner integration would.
+        self._signing_key = signing_key or derive_signing_key()
         self._clock = clock or (lambda: datetime.now(UTC))
         self._program = program
         self._counters: dict[str, int] = {}
@@ -347,6 +354,23 @@ class GnosisPaySimulator:
         self._ephemeral: dict[str, tuple[str, datetime]] = {}
         self._spent_ephemeral: set[str] = set()
         self._deliveries: list[Delivery] = []
+
+    # ------------------------------------------------------- webhook keys ----
+
+    @property
+    def public_key(self) -> Ed25519PublicKey:
+        """The verifying key, as a partner would hold it after fetching it once."""
+        return self._signing_key.public_key()
+
+    def public_key_endpoint(self) -> dict[str, Any]:
+        """`GET https://webhooks.gnosispay.com/api/v1/public-key`.
+
+        Nothing in this repo fetches it — the adapter is handed the key by the
+        constructor, because over HTTP this is one cached call at startup and not
+        part of what the pipeline is here to exercise. Modelled anyway so the
+        published shape is written down where the integration will need it.
+        """
+        return public_key_document(self.public_key)
 
     # ------------------------------------------------------------ helpers ----
 
@@ -1035,7 +1059,7 @@ class GnosisPaySimulator:
             headers={
                 "content-type": "application/json",
                 TIMESTAMP_HEADER: timestamp,
-                SIGNATURE_HEADER: sign(self._secret, timestamp=timestamp, body=body),
+                SIGNATURE_HEADER: sign(self._signing_key, timestamp=timestamp, body=body),
             },
             body=body,
         )

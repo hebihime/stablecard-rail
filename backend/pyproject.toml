@@ -20,6 +20,10 @@ dependencies = [
     # names no HTTP client, but it does require real provider calls in §3.2 —
     # see docs/ARCHITECTURE.md §4.3.
     "httpx>=0.27",
+    # Ed25519, for the Gnosis Pay webhook scheme. Their signatures are asymmetric
+    # and the standard library has no Ed25519, so verifying the scheme they
+    # actually document is not possible without this (docs/ARCHITECTURE.md §7.3).
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

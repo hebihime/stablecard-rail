@@ -22,6 +22,9 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from app.core.money import Money
 from app.issuers.base import (
@@ -40,8 +43,11 @@ from app.issuers.base import (
 )
 from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
 from app.issuers.gnosis_pay_mock.signing import (
+    KEY_ALGORITHM,
     SIGNATURE_HEADER,
     TIMESTAMP_HEADER,
+    derive_signing_key,
+    load_public_key,
     sign,
 )
 from app.issuers.gnosis_pay_mock.simulator import (
@@ -50,18 +56,23 @@ from app.issuers.gnosis_pay_mock.simulator import (
     SAFE_CURRENCIES,
 )
 
-SECRET = "test-mock-secret"
 FIXED_NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
+#: The provider's keypair, and one that is not the provider's.
+SIGNING_KEY = derive_signing_key("test-provider-key")
+OTHER_KEY = derive_signing_key("someone-elses-key")
 
 
 def build_adapter(
-    *, secret: str = SECRET, now: datetime = FIXED_NOW, tolerance_seconds: int = 300
+    *,
+    signing_key: Ed25519PrivateKey = SIGNING_KEY,
+    now: datetime = FIXED_NOW,
+    tolerance_seconds: int = 300,
 ) -> GnosisPayMockAdapter:
     def clock() -> datetime:
         return now
 
     return GnosisPayMockAdapter(
-        webhook_secret=secret, signature_tolerance_seconds=tolerance_seconds, clock=clock
+        signing_key=signing_key, signature_tolerance_seconds=tolerance_seconds, clock=clock
     )
 
 
@@ -117,9 +128,10 @@ def test_the_simulator_is_reachable_for_demos_but_not_for_the_pipeline(
     assert adapter.simulator is adapter.simulator
 
 
-def test_the_registry_factory_needs_no_settings_of_its_own() -> None:
-    # The point of the module-constant signing key: this adapter reads only the
-    # shared webhook setting, so registering it cost no change to core/config.py.
+def test_the_registry_factory_reads_this_packages_own_settings() -> None:
+    # No credentials to configure — a simulator in this process — so the factory
+    # takes the defaults. What matters is where it reads them from: this package,
+    # never `app/core/config.py` (enforced by test_module_boundaries.py).
     built = GnosisPayMockAdapter.from_settings()
     assert built.provider_id == "gnosis_pay_mock"
     assert isinstance(built, GnosisPayMockAdapter)
@@ -548,13 +560,54 @@ async def test_an_unknown_ephemeral_token_is_refused(adapter: GnosisPayMockAdapt
 # ------------------------------------------------------ webhook signatures ----
 
 
-def _headers_for(body: bytes, *, secret: str = SECRET, now: datetime = FIXED_NOW) -> dict[str, str]:
+def _headers_for(
+    body: bytes,
+    *,
+    signing_key: Ed25519PrivateKey = SIGNING_KEY,
+    now: datetime = FIXED_NOW,
+) -> dict[str, str]:
     timestamp = str(int(now.timestamp()))
     return {
         "content-type": "application/json",
         TIMESTAMP_HEADER: timestamp,
-        SIGNATURE_HEADER: sign(secret, timestamp=timestamp, body=body),
+        SIGNATURE_HEADER: sign(signing_key, timestamp=timestamp, body=body),
     }
+
+
+def test_the_scheme_is_asymmetric_so_the_adapter_holds_no_signing_key() -> None:
+    # The property worth having, and the reason this is Ed25519 and not an HMAC:
+    # a partner cannot leak, rotate or misconfigure a secret it was never given.
+    adapter = build_adapter()
+    private_keys = [
+        name for name, value in vars(adapter).items() if isinstance(value, Ed25519PrivateKey)
+    ]
+    assert not private_keys, private_keys
+    assert isinstance(adapter.simulator.public_key, Ed25519PublicKey)
+
+
+def test_the_public_key_is_published_in_the_shape_their_endpoint_serves() -> None:
+    # `GET https://webhooks.gnosispay.com/api/v1/public-key`, checked 2026-07-25:
+    # {"success":true,"publicKey":"-----BEGIN PUBLIC KEY-----\n…","algorithm":"ed25519"}
+    document = build_adapter().simulator.public_key_endpoint()
+
+    assert document["success"] is True
+    assert document["algorithm"] == KEY_ALGORITHM == "ed25519"
+    assert document["publicKey"].startswith("-----BEGIN PUBLIC KEY-----")
+    # And it round-trips: what is published is what verifies.
+    assert load_public_key(document["publicKey"]) == SIGNING_KEY.public_key()
+
+
+def test_a_published_key_of_the_wrong_type_is_refused() -> None:
+    # An RSA key in the `publicKey` field is a misconfiguration, not a signature
+    # failure, so it raises rather than quietly rejecting every delivery.
+    rsa_pem = (
+        generate_private_key(public_exponent=65537, key_size=2048)
+        .public_key()
+        .public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
+    with pytest.raises(ValueError, match="ed25519"):
+        load_public_key(rsa_pem)
 
 
 async def test_a_genuine_delivery_verifies(adapter: GnosisPayMockAdapter) -> None:
@@ -585,10 +638,12 @@ async def test_a_tampered_timestamp_fails_verification(adapter: GnosisPayMockAda
     assert await adapter.verify_webhook(headers, delivery.body) is False
 
 
-async def test_another_secret_fails_verification(adapter: GnosisPayMockAdapter) -> None:
+async def test_a_delivery_signed_by_another_key_fails_verification(
+    adapter: GnosisPayMockAdapter,
+) -> None:
     card_id = await make_card(adapter)
     delivery = adapter.simulator.emit_card_status_changed(card_id)
-    other = build_adapter(secret="not-the-same-secret")
+    other = build_adapter(signing_key=OTHER_KEY)
     assert await other.verify_webhook(delivery.headers, delivery.body) is False
 
 

@@ -5,9 +5,10 @@ this process, so it has no credentials to hold and no base URL to point at. The
 one real knob is the webhook receiving window, and it belongs to whoever owns the
 signing scheme.
 
-No signing key appears here either: the key authenticates a Python object in this
-process to itself, so it grants access to nothing and lives as a module constant
-in `adapter.py` rather than as configuration.
+No signing key appears here either, and could not: the scheme is asymmetric, so
+the adapter verifies with a published public key and holds no secret at all. The
+simulator derives the private half from a seed in `signing.py`, where it is worth
+nothing to anyone — it authenticates a Python object in this process to itself.
 """
 
 from __future__ import annotations

@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from app.core.money import Money
 from app.issuers.base import (
     Card,
@@ -57,12 +59,6 @@ from app.issuers.gnosis_pay_mock.simulator import (
     SafeCurrency,
     to_money,
 )
-
-#: The webhook signing key. A module constant rather than a `Settings` field: the
-#: "provider" it authenticates to is a Python object in this process, so the key
-#: grants access to nothing, and a per-adapter settings field is a coupling the
-#: abstraction should not need.
-MOCK_WEBHOOK_SECRET = "gnosis-pay-mock-in-process-signing-key"
 
 #: Provider `eventType` -> our normalized type (SPEC.md §3.3). Anything absent
 #: from this map becomes `UNMAPPED`; it is never dropped. `card.transaction.cleared`
@@ -109,14 +105,16 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
     def __init__(
         self,
         *,
-        webhook_secret: str = MOCK_WEBHOOK_SECRET,
+        signing_key: Ed25519PrivateKey | None = None,
         signature_tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._tolerance_seconds = signature_tolerance_seconds
-        self._secret = webhook_secret
-        self._simulator = GnosisPaySimulator(webhook_secret=webhook_secret, clock=self._clock)
+        # The key goes to the *simulator*, which is the party that signs. This
+        # adapter holds no private key: `verify_webhook` reads the public half back
+        # out, which is all a real partner integration ever has.
+        self._simulator = GnosisPaySimulator(signing_key=signing_key, clock=self._clock)
 
     @classmethod
     def from_settings(cls) -> GnosisPayMockAdapter:
@@ -260,7 +258,7 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
 
     async def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
         return verify(
-            self._secret,
+            self._simulator.public_key,
             headers=headers,
             body=body,
             now=self._clock(),
