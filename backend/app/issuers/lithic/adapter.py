@@ -25,6 +25,7 @@ ledger's payload column — so the fields that go in are named one by one.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -42,7 +43,9 @@ from app.issuers.base import (
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
+    FundingRejectedError,
     FundingResult,
+    FundingStatus,
     IllegalCardTransitionError,
     IssuerError,
 )
@@ -84,6 +87,15 @@ SANDBOX_ADDRESS: Mapping[str, str] = {
 
 #: Namespace for the deterministic `Idempotency-Key` on card creation.
 _IDEMPOTENCY_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "urn:stablecard:lithic:create-card")
+
+#: How a funding ref is recorded on a card. The card's `memo` is the only writable
+#: free-text field it has, and it is the *provider's* copy — which is what makes it
+#: readable again after a crash mid-funding (docs/ARCHITECTURE.md §4.5).
+_FUNDING_TAG = "fund"
+_FUNDING_TAG_PATTERN = re.compile(rf"\s*\[{_FUNDING_TAG}:(?P<ref>[^\]:]+):(?P<amount>-?\d+)\]")
+
+#: Conservative cap for a card memo; Lithic documents no maximum.
+_MEMO_MAX_LENGTH = 128
 
 __all__ = ["CARD_STATES", "PROVIDER_ID", "LithicAdapter"]
 
@@ -261,13 +273,113 @@ class LithicAdapter(CardIssuerAdapter):
             },
         )
 
-    # ------------------------------------------------- funding (phase 3d) ----
+    # --------------------------------------------------------------- money ----
 
     async def fund_card(self, card_id: str, amount: Money, funding_ref: str) -> FundingResult:
-        raise NotImplementedError
+        """Fund by raising the card's lifetime spend limit.
+
+        This program has no ledger to move money in: `POST /v1/financial_accounts`
+        answers 403 and `GET /v1/balances` answers 400 "Account does not support this
+        operation", so book transfers — the production path — are unavailable. The
+        one per-card dial that exists is the spend limit
+        (docs/ARCHITECTURE.md §4.4).
+
+        Idempotency comes from the memo tag, because Lithic's `Idempotency-Key`
+        covers card creation and not `PATCH`. The provider holds the record, which is
+        what makes it survive our crash mid-call; what it cannot do is remember an
+        older ref once a newer funding has replaced the tag.
+        """
+        card = await self._read_card(card_id)
+        state = CARD_STATES.get(_require_str(card, "state"))
+        limit = _as_optional_int(card.get("spend_limit"))
+        memo = str(card.get("memo") or "")
+        currency = str(card.get("cardholder_currency") or "USD")
+
+        applied = _read_funding_tag(memo)
+        if applied is not None and applied[0] == funding_ref:
+            if applied[1] != amount.amount_minor:
+                raise FundingRejectedError(
+                    card_id,
+                    f"funding ref {funding_ref!r} was already applied for "
+                    f"{applied[1]} minor units, not {amount.amount_minor}",
+                )
+            return self._funding_result(card_id, amount, funding_ref, limit or 0, replayed=True)
+
+        if amount.amount_minor <= 0:
+            raise FundingRejectedError(card_id, f"amount must be positive, got {amount}")
+        if amount.currency != currency:
+            raise FundingRejectedError(
+                card_id, f"card is denominated in {currency}, not {amount.currency}"
+            )
+        if state is CardState.CANCELED:
+            raise FundingRejectedError(card_id, "card is canceled")
+        if not limit:
+            raise FundingRejectedError(
+                card_id,
+                "card has no spend limit, which Lithic reads as unlimited; raising it "
+                "would replace an unlimited card with a limited one",
+            )
+
+        raised = limit + amount.amount_minor
+        await self._client.patch(
+            f"/cards/{card_id}",
+            json_body={
+                "spend_limit": raised,
+                # Restated every time: a limit on any other window is not a balance.
+                "spend_limit_duration": "FOREVER",
+                "memo": _tag_memo(memo, funding_ref, amount.amount_minor),
+            },
+        )
+        return self._funding_result(card_id, amount, funding_ref, raised, before=limit)
+
+    def _funding_result(
+        self,
+        card_id: str,
+        amount: Money,
+        funding_ref: str,
+        after: int,
+        *,
+        before: int | None = None,
+        replayed: bool = False,
+    ) -> FundingResult:
+        return FundingResult(
+            provider_id=self.provider_id,
+            card_id=card_id,
+            funding_ref=funding_ref,
+            # There is no provider-side funding object to name, so the reference is
+            # the provider-side *result*: this card at this limit. That is what a
+            # reconciler can actually go and check.
+            issuer_funding_ref=f"{card_id}:{after}",
+            status=FundingStatus.SUCCEEDED,
+            amount=amount,
+            raw={
+                "spend_limit_before": before if before is not None else after,
+                "spend_limit_after": after,
+                "replayed": replayed,
+            },
+        )
 
     async def get_balance(self, card_id: str) -> Money:
-        raise NotImplementedError
+        """Available spend: the card's limit, minus what it is holding and has spent.
+
+        Lithic exposes no per-card balance for this program, and the numbers to
+        derive one from are on the transactions: a pending authorization sits in
+        `amounts.hold` and a settled one in `amounts.cardholder`, both negative.
+        Summing them and adding the limit is the whole calculation — and it must read
+        every page, or a busy card reports a balance that is too high.
+        """
+        card = await self._read_card(card_id)
+        limit = _as_optional_int(card.get("spend_limit"))
+        if not limit:
+            raise IssuerError(
+                f"card {card_id} has no spend limit, which Lithic reads as unlimited; "
+                f"there is no available balance to report"
+            )
+        transactions = await self._client.list_all("/transactions", params={"card_token": card_id})
+        return Money(
+            limit + sum(_transaction_impact(entry) for entry in transactions),
+            str(card.get("cardholder_currency") or "USD"),
+        )
 
     # ------------------------------------------------ webhooks (phase 3e) ----
 
@@ -276,6 +388,57 @@ class LithicAdapter(CardIssuerAdapter):
 
     async def parse_webhook(self, headers: Mapping[str, str], body: bytes) -> CardEvent:
         raise NotImplementedError
+
+
+# ---------------------------------------------------------------- funding ----
+
+
+def _tag_memo(memo: str, funding_ref: str, amount_minor: int) -> str:
+    """The cardholder's label plus the funding tag, within Lithic's memo length.
+
+    The tag replaces any previous one rather than accumulating: `memo` is a display
+    field, not a log. If something has to be cut it is the label, never the tag —
+    the tag is the idempotency record.
+    """
+    tag = f"[{_FUNDING_TAG}:{funding_ref}:{amount_minor}]"
+    label = _FUNDING_TAG_PATTERN.sub("", memo).strip()
+    room = _MEMO_MAX_LENGTH - len(tag) - 1
+    if not label or room <= 0:
+        return tag
+    return f"{label[:room].strip()} {tag}"
+
+
+def _read_funding_tag(memo: str) -> tuple[str, int] | None:
+    """The funding ref and amount last applied to this card, if any."""
+    found = _FUNDING_TAG_PATTERN.search(memo)
+    if found is None:
+        return None
+    return found.group("ref"), int(found.group("amount"))
+
+
+def _transaction_impact(transaction: Mapping[str, Any]) -> int:
+    """What one transaction does to a card's available spend, in minor units.
+
+    Lithic reports a pending authorization as a negative `hold` and a settled one as
+    a negative `cardholder`; a refund is positive, and a declined or voided
+    transaction is zero on both. Summing the pair therefore covers every state
+    without a status table — and reading a transaction wrong must fail loudly rather
+    than contribute nothing, because a plausible wrong balance funds the wrong amount.
+    """
+    amounts = transaction.get("amounts")
+    if not isinstance(amounts, Mapping):
+        raise IssuerError(f"lithic transaction {transaction.get('token')!r} has no amounts")
+    total = 0
+    for part in ("hold", "cardholder"):
+        entry = amounts.get(part, {})
+        value = entry.get("amount", 0) if isinstance(entry, Mapping) else None
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise IssuerError(
+                f"lithic transaction {transaction.get('token')!r} has a "
+                f"non-integer {part} amount: {value!r}"
+            )
+        total += value
+    return total
 
 
 # ---------------------------------------------------------------- reading ----

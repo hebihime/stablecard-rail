@@ -21,7 +21,7 @@ response bodies.
 
 One `httpx.AsyncClient` is created per request rather than held for the process.
 That costs a connection setup per call, and buys not needing a shutdown hook on the
-issuer interface for a resource only one adapter has (docs/ARCHITECTURE.md §4.4).
+issuer interface for a resource only one adapter has (docs/ARCHITECTURE.md §4.3).
 """
 
 from __future__ import annotations

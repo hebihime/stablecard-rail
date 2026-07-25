@@ -470,6 +470,87 @@ What adapters *may* share is `app/core/` (`Money`, settings) and `issuers/base.p
 Both are stable by construction: `base.py` is the contract, and a change to it is
 already a breaking change that `tests/test_issuer_interface.py` will report.
 
+### 4.3 An HTTP client, and not Lithic's SDK
+
+SPEC.md §2 names no HTTP client, because phases 1 and 2 needed none. §3.2 requires
+real provider calls, so phase 3 does. `httpx` moves from a dev dependency to a
+runtime one and `respx` joins the dev ones — `respx` was pre-approved and is
+`httpx`-specific, so this is the same decision arriving in two files.
+
+Not the vendor SDK, for three reasons. It brings its own retry policy and its own
+models, which would then have to be translated twice — once from their types into
+ours, and once around whatever they retry. Its surface is far larger than the eight
+endpoints this adapter touches. And phase 4 adds Stripe: two vendor SDKs with two
+opinions about connection handling is more code than two small clients, not less.
+What the adapter actually needs is four verbs, one auth header, cursor pagination and
+error translation, and that is `client.py` — 85 statements, tested to 100%.
+
+`client.py` opens one `httpx.AsyncClient` per request rather than holding one for the
+process. A pooled client would be faster, but it is a resource with a lifetime, and
+the registry hands out memoized adapters with no `aclose()` in the interface. Adding
+a shutdown hook to `CardIssuerAdapter` for something only one adapter has is the kind
+of leak §4.1 exists to prevent, and per-request setup is invisible at sandbox scale.
+Recorded as a production-path item in §5.
+
+### 4.4 Funding a Lithic card raises its spend limit
+
+**This program has no ledger.** `POST /v1/financial_accounts` answers 403 and
+`GET /v1/balances?account_token=…` answers 400 "Account does not support this
+operation". So the documented production path — a book transfer into the account's
+`ISSUING` financial account, with a client-supplied `token` that is idempotent by
+construction — cannot be built or recorded here.
+
+What the program does expose per card is `spend_limit`. So:
+
+- **funding** = `PATCH /v1/cards/{token}` raising `spend_limit` by the amount;
+- **balance** = that limit, minus the sum of `amounts.hold` and `amounts.cardholder`
+  over the card's transactions.
+
+Three things had to be learned by walking the API rather than reading about it:
+
+1. **`spend_limit: 0` means *unlimited*, not "nothing".** So a zero-limit card cannot
+   be expressed at all, and both `create_card` and `fund_card` refuse rather than
+   quietly hand out an unlimited card.
+2. **`spend_limit_duration` is forced to `TRANSACTION` when the limit is 0**, and a
+   later `PATCH` of the limit alone does not change it back. Every write therefore
+   restates `FOREVER` — on any other window the limit resets, and funding would leak
+   away with the calendar.
+3. **The `hold` + `cardholder` sum covers every transaction state** with no status
+   table: a pending authorization is a negative `hold`, a settled one a negative
+   `cardholder`, a refund positive, and a declined or voided transaction zero on
+   both.
+
+### 4.5 The funding idempotency record lives in the card's memo
+
+`fund_card`'s contract is that two calls with one `funding_ref` fund once (SPEC.md
+§10). Lithic supports `Idempotency-Key` on `POST /v1/cards` and
+`POST /v1/financial_accounts` only — not on the `PATCH` that funding uses — and a
+limit raise is a read-add-write, which is exactly the shape that double-applies.
+
+An adapter is stateless with respect to our database (it may not import `funding/` or
+`ledger/`), so the record has to live at the provider. The only writable free-text
+field a card has is `memo`, so a funding writes
+`"<label> [fund:<ref>:<amount_minor>]"` alongside the cardholder's own label, and
+`fund_card` reads it back before doing anything. That the *provider* holds it is the
+point: it survives our process dying mid-call, which is the failure this contract
+exists for.
+
+Bought:
+
+- an immediately retried funding is applied once and returns the same result;
+- a ref replayed with **different terms** is refused rather than re-applied, so a
+  caller bug is a loud error instead of a double-funded card;
+- the tag replaces rather than accumulates, and truncates the label rather than the
+  tag if the memo runs long.
+
+Not bought: **only the most recent ref is remembered.** Replaying a *stale* ref after
+a newer funding has landed would re-apply it. That is bounded by how the funding
+engine works — one intent per card at a time, `PENDING → FUNDED`, retrying the
+current intent — and by phase 1's ledger, which dedups on the intent's idempotency
+key before an adapter is called at all. It is stated here rather than hidden because
+it is a real limit of the scheme, and on a ledger-enabled program the book-transfer
+path replaces it with provider-side idempotency and no tag at all.
+
 ---
 
 ## 5. Deferred decisions
@@ -483,6 +564,20 @@ Recorded here when their phase lands, per SPEC.md §11:
 - **`deposit_address → card` index** for the chain watcher, projected from the
   ledger's `card.created` events — phase 5 (see §3.4).
 - **Reconciler thresholds** for stuck intents — phase 5.
+- **A retryable marker on issuer errors.** `lithic/client.py` already knows which
+  failures are worth retrying (429, 5xx, timeouts) and retries them itself, but that
+  knowledge cannot cross `issuers/base.py` — so the funding engine cannot yet tell
+  "the provider is busy" from "the provider refused". Phase 5 needs the distinction to
+  decide between a retry and a `FAILED` intent; adding it before there is a consumer
+  would be guessing at the shape.
+- **A pooled HTTP client with a shutdown hook.** `lithic/client.py` opens a
+  connection per request to avoid putting a resource lifetime on the issuer interface
+  (§4.3). A production path pools connections and closes them from a FastAPI lifespan,
+  which needs an `aclose()` on `CardIssuerAdapter` that every adapter would inherit
+  for one adapter's benefit — worth doing when a second adapter also needs it.
+- **Book-transfer funding** for a ledger-enabled Lithic program, replacing the memo
+  tag with provider-side idempotency (§4.4, §4.5). Needs a program this sandbox does
+  not have.
 - **Signer**: `LocalKeypairSigner` (default) and `FireblocksSigner` behind one
   `TransactionSigner` interface — phases 5 and 9.
 
