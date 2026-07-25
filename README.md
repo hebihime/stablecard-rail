@@ -1,6 +1,6 @@
 # StableCard Rail
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
+[![CI](https://github.com/hebihime/stablecard-rail/actions/workflows/ci.yml/badge.svg)](https://github.com/hebihime/stablecard-rail/actions/workflows/ci.yml)
 ![coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
 ![python](https://img.shields.io/badge/python-3.12-blue)
 
@@ -16,8 +16,6 @@ state machine, and a thin React Native client.
 - [`SPEC.md`](SPEC.md) — the full specification and build phases
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — pipeline diagram and design decisions
 - [`docs/DEMO.md`](docs/DEMO.md) — run it locally with free credentials only
-
-> Badge URLs point at `OWNER/REPO` until this is pushed to a GitHub remote.
 
 ## Build status
 
