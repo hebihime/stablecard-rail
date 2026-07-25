@@ -55,9 +55,11 @@ flowchart LR
     CARD --> REG
 ```
 
-Phase 1 (built) is the shaded core: `funding_intents`, `ledger_events`, and
-`advance()`. Everything reaching into it arrives in a later phase behind an
-interface that already exists or is specified.
+Built so far: the core (`funding_intents`, `ledger_events`, `advance()`), the
+issuer abstraction with the `evm_deposit_mock` adapter, the card lifecycle
+endpoints, and the webhook receiver with its `EventBus`, retry queue and
+dead-letter table. Everything else arrives in a later phase behind an interface
+that already exists or is specified.
 
 ---
 
@@ -226,29 +228,206 @@ dependency only, as FastAPI's own test transport.
 SPEC.md §10 gates `funding/`, `webhooks/`, `issuers/`, `ledger/` at ≥60%.
 `[tool.coverage.run] source` lists only the packages that exist in the current
 phase, and each phase adds its own — otherwise the gate would measure absent code.
-Phase 1 measures `funding/` + `ledger/`: **100%**, against a 60% floor.
+All four now exist and measure **100%** against the 60% floor.
 
 ### 2.15 Repository root
 
 SPEC.md §1 names the root `stablecard-rail/`; this checkout is `crypto-card/`.
 Everything inside matches the specified layout. Directories for unbuilt phases
-(`app/issuers/`, `app/chain/`, `app/webhooks/`, `mobile/`) are absent rather than
-empty, to keep "no scaffolding ahead of the phase" visible in the tree.
+(`app/chain/`, `mobile/`) are absent rather than empty, to keep "no scaffolding
+ahead of the phase" visible in the tree.
 
 ---
 
-## 3. Deferred decisions
+## 3. Decisions recorded in phase 2
+
+### 3.1 The registry holds factories, not instances
+
+`issuers/registry.py` maps `provider_id` → a zero-argument factory, and memoizes
+the first result. Two reasons it is not a dict of instances:
+
+- Adapters read settings and (from phase 3) open HTTP clients. Doing that at import
+  time makes configuration errors surface as import errors, in the wrong place.
+- The memoized instance means a provider holding state — the mock's in-process
+  simulator — is a singleton per process. Otherwise a card created through one call
+  site would be invisible to the next.
+
+Re-registering a `provider_id` raises unless `replace=True` is passed. A silent
+collision would reroute money, because `provider_id` is what a funding intent
+stores to decide who to pay.
+
+**Adding an issuer is one adapter file plus one `register()` line** in
+`app/issuers/__init__.py`. `tests/test_module_boundaries.py` reads the import graph
+and fails if any module outside `issuers/` imports anything but `base` and
+`registry`, or if any adapter imports `funding/`, `ledger/`, `webhooks/` or `api/`.
+That is the difference between a design rule and a design aspiration — and it is
+what phase 4 will demonstrate rather than discover.
+
+### 3.2 Funding-model taxonomy
+
+SPEC.md §3.1 puts `funding_model` on the interface; §3.2 asks the mock to prove the
+abstraction spans both. The distinction is *what `fund_card` means*:
+
+| | `FIAT_RAIL` (Lithic, Stripe) | `CRYPTO_DEPOSIT` (`evm_deposit_mock`) |
+|---|---|---|
+| Where money comes from | a program balance funded by bank transfer | a token transfer to a provider-assigned address |
+| `fund_card` | debits the program balance | attributes an observed deposit to the card |
+| `Card.deposit_address` | `None` | the address the bridge must send to |
+
+Only two things in the shared models exist for the crypto side —
+`Card.deposit_address` and the taxonomy enum itself — and both are optional or
+inspectable, so a fiat adapter never invents a value it does not have. Everything
+else provider-specific lives in `raw`.
+
+Concretely, the mock's `fund_card` credits the card and then emits an asynchronous
+`settlement` webhook, which is what SPEC.md §5.2 step 4 reconciles the intent
+from. Phase 5's engine calls it only from `BRIDGED`, i.e. once funds have actually
+reached the deposit address.
+
+### 3.3 `webhook_event_id` and `get_card` are additions to §3.1
+
+Two methods not in the spec's list:
+
+- **`webhook_event_id(headers, body)`** — non-abstract, defaulting to `None`. SPEC.md
+  §4 puts dedup *before* parse, which means the dedup key must be readable without
+  trusting the body to be well-formed. That ordering is what makes an
+  authentic-but-unreadable delivery safe: it is recorded once as `unmapped` instead
+  of failing to parse on every redelivery, forever. Adapters whose provider has no
+  envelope id inherit the default and the receiver falls back to `sha256(body)`.
+  Whatever an adapter returns must be **covered by the signature** — otherwise the
+  dedup key is forgeable, and a legitimate body can be replayed under a fresh id.
+- **`get_card(card_id)`** — the freeze/unfreeze toggle and card screen (§9.1) need to
+  read state without mutating it, and the ledger's `state_before` needs it too.
+
+Both are asserted in `tests/test_issuer_interface.py`, which also fails if the
+interface grows a third addition without this section being updated.
+
+### 3.4 No local card table
+
+Card routes are `/providers/{provider_id}/cards/{card_id}`: the provider is named
+in the path rather than looked up from a local table, because there is no local
+table. The provider owns card state, and a second copy here would be a cache that
+can silently disagree with the thing it caches — exactly the class of bug that ends
+with a frozen card that our API reports as active.
+
+The cost is that a client must remember which provider issued a card. That is
+acceptable now (a funding intent already stores `provider_id`) and will be revisited
+in phase 5, which needs a `deposit_address → card` index for the chain watcher. That
+index will be a projection of the ledger's `card.created` events, which already
+record the deposit address for exactly this reason — not a second source of truth
+about card state.
+
+### 3.5 The ledger only records authenticated events
+
+`POST /webhooks/{provider_id}` is open to the internet. A failed signature gets a
+401, a log line, and nothing else: ledgering rejected traffic would let anyone write
+to the audit log and exhaust the keyspace its unique index depends on. Signature
+failures are a metrics-and-logs concern, not an evidence concern.
+
+### 3.6 Dedup claims are released on failure
+
+SPEC.md §4 specifies `SETNX` *before* the work, which is the right way round for
+concurrency — two simultaneous deliveries cannot both pass. It opens one window:
+claim, then die before the ledger write, and the provider's redelivery looks like a
+duplicate for the life of the TTL (a day). So every failure path before commit calls
+`DedupGate.release()`. `tests/test_webhook_receiver.py` asserts both halves — that
+the claim is given back, and that the redelivery is then processed.
+
+The durable layer is unchanged from phase 1: `ledger_events.idempotency_key` is
+unique, and the receiver treats a violation on that specific constraint as "already
+recorded". Any other `IntegrityError` propagates, so a real schema violation is
+never mistaken for a duplicate.
+
+### 3.7 Handler failure is our problem, not the provider's
+
+Once verification succeeds the provider gets a 200 — including when a handler
+throws. Answering 5xx would make the provider retry the whole delivery (re-running
+handlers that already succeeded) and, with exponential backoff, eventually give up
+on us. So a failed handler is queued individually:
+
+- A Redis sorted set scored by "next due", claimed on read so two workers cannot
+  run the same handler twice.
+- Items are self-contained — the whole normalized event travels with the retry — so a
+  retry works in another process, after a restart, or by hand from a dead-letter row.
+- Backoff is config-driven (`WEBHOOK_RETRY_BACKOFF_SECONDS`, default
+  `[2,8,32,128,512]`). Its **length is the retry cap**: one inline attempt plus one
+  retry per step, then the delivery is dead-lettered.
+- A handler whose subscription no longer exists — a deploy removed it — is
+  dead-lettered immediately rather than cycling against a name nothing answers to.
+
+Dead letters go to a table, not a Redis key, because giving up on a provider event
+is an operational fact someone has to find later. One row per
+`(provider_id, event_id, handler)` via `ON CONFLICT DO NOTHING`, so a second worker
+reaching the same conclusion does not double-report. First arrivals are ledgered as
+`webhook.dead_lettered`; suppressed duplicates are not.
+
+Draining is `scripts/drain_webhook_retries.py`, a separate process. A retry worker
+inside the web process is one that dies with it and that nobody can run by hand.
+
+### 3.8 Kafka vs Redis Streams
+
+The `EventBus` interface is the architectural point; `RedisStreamsEventBus` is the
+implementation. Redis Streams is a real fit rather than a fudge — ordered entries,
+monotonic ids, and a consumer can resume from the last id it processed, which is
+what a replayable log needs. What it lacks against Kafka is partitioning, retention
+policy, and multi-broker durability. A Kafka implementation is a drop-in: consumers
+receive `CardEvent`s and never learn what carried them.
+
+Two operational details: publishing happens before handlers run and unconditionally,
+so a consumer added in phase 5 can replay the stream from the beginning; and the
+stream is length-capped, because Redis has no per-entry TTL and an uncapped stream
+is an unbounded memory leak.
+
+### 3.9 Ledger event naming for provider events
+
+Provider events are recorded as `provider.<normalized_type>` —
+`provider.authorization`, `provider.settlement`, `provider.unmapped` — via
+`event_types.provider_event()`. One namespace for "things a provider told us", as
+against `card.*` for things we did and `funding_intent.*` for state changes. It is a
+function rather than a constant per case so `ledger/` never has to import the
+`CardEventType` vocabulary.
+
+### 3.10 No consumers are subscribed yet
+
+`dispatch.subscribe()` exists and is fully tested; phase 2 registers nothing. The
+funding engine subscribes in phase 5 and the OTP service in phase 7. Each handler
+must document its idempotency key at the subscription site, per SPEC.md §4 — a
+handler can be re-run by a retry, by a drain in another process, or by hand from a
+dead-letter row. `tests/test_webhook_dispatch.py` asserts that booting the app
+registers no handlers, so a consumer cannot appear ahead of its phase by accident.
+
+### 3.11 The mock provider is a package, and its secret is not a secret
+
+`issuers/evm_deposit_mock/` is a directory rather than one file because it ships the
+*provider* as well as the adapter: `adapter.py` is the one file a real issuer needs,
+while `simulator.py` and `signing.py` stand in for servers that, for Lithic and
+Stripe, belong to someone else.
+
+The simulator signs its own webhooks with `EVM_DEPOSIT_MOCK_WEBHOOK_SECRET`, which
+has a default value in `.env.example` and in `Settings`. That is not a violation of
+"no secrets in the repo": the provider it authenticates to is a Python object in
+this process, so the key grants access to nothing. Real adapter credentials (phases
+3 and 4) will have no defaults and no example values.
+
+Everything the simulator produces is deterministic — per-kind counters for ids,
+hash-derived deposit addresses — so a demo run twice produces the same output and a
+test never has to know a random value. `last_four` is a repeating synthetic pattern
+that could not be mistaken for card-number material, and there is no PAN or CVV
+anywhere: reveal is a separate short-lived single-use path in phase 8.
+
+---
+
+## 4. Deferred decisions
 
 Recorded here when their phase lands, per SPEC.md §11:
 
-- **Issuer registry design** and the "new issuer = one file" enforcement — phase 2.
-- **Funding-model taxonomy** (`FIAT_RAIL` vs `CRYPTO_DEPOSIT`) — phase 2.
 - **Why CCTP cannot serve a Solana→BSC route**, and what that implies for
   reconciliation — phase 6, with the bridge adapter.
 - **deBridge vs Wormhole**, chosen on which has a working Solana→BSC testnet route
   at build time — phase 6.
-- **Kafka vs Redis Streams**: an `EventBus` interface with a Redis Streams
-  implementation stands in; a Kafka implementation would be a drop-in — phase 2.
+- **`deposit_address → card` index** for the chain watcher, projected from the
+  ledger's `card.created` events — phase 5 (see §3.4).
+- **Reconciler thresholds** for stuck intents — phase 5.
 - **Signer**: `LocalKeypairSigner` (default) and `FireblocksSigner` behind one
   `TransactionSigner` interface — phases 5 and 9.
 
@@ -257,13 +436,13 @@ Kafka itself, real KYC, physical cards.
 
 ---
 
-## 4. Module dependency rule
+## 5. Module dependency rule
 
-Enforced by review now, by structure from phase 2: every module outside
-`app/issuers/` may import only `issuers/base.py` and `issuers/registry.py`. If
-adding a second adapter required a change to `funding/`, `ledger/`, `webhooks/` or
-the mobile client, that is a design bug in the abstraction, not something to patch
-around (SPEC.md §12 phase 4 exists to test exactly this).
+Every module outside `app/issuers/` may import only `issuers/base.py` and
+`issuers/registry.py`; no adapter may import `funding/`, `ledger/`, `webhooks/` or
+`api/`. If adding a second adapter required a change to any of those, that is a
+design bug in the abstraction, not something to patch around (SPEC.md §12 phase 4
+exists to test exactly this).
 
-Phase 1 has no `issuers/` package, so the rule is trivially held: `funding/` and
-`ledger/` depend only on `core/`.
+Enforced by `tests/test_module_boundaries.py`, which parses the import graph rather
+than trusting review.
