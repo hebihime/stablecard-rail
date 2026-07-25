@@ -1,0 +1,49 @@
+{
+  "id": "ich_1SbHolderStablecard01",
+  "object": "issuing.cardholder",
+  "billing": {
+    "address": {
+      "city": "New York",
+      "country": "US",
+      "line1": "1 Analytical Engine Way",
+      "line2": null,
+      "postal_code": "10128",
+      "state": "NY"
+    }
+  },
+  "company": null,
+  "created": 1785000000,
+  "email": "ada@example.test",
+  "individual": {
+    "card_issuing": {
+      "user_terms_acceptance": {
+        "date": null,
+        "ip": null,
+        "user_agent": null
+      }
+    },
+    "dob": null,
+    "first_name": "Ada",
+    "last_name": "Lovelace",
+    "verification": null
+  },
+  "livemode": false,
+  "metadata": {
+    "stablecard_external_ref": "user-42"
+  },
+  "name": "Ada Lovelace",
+  "phone_number": "+15555550123",
+  "redaction": null,
+  "requirements": {
+    "disabled_reason": null,
+    "past_due": []
+  },
+  "spending_controls": {
+    "allowed_categories": null,
+    "blocked_categories": null,
+    "spending_limits": [],
+    "spending_limits_currency": null
+  },
+  "status": "active",
+  "type": "individual"
+}

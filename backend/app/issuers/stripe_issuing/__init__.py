@@ -8,4 +8,6 @@ entry in `app/issuers/__init__.py` is the only place this package is named.
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from app.issuers.stripe_issuing.adapter import PROVIDER_ID, StripeIssuingAdapter
+
+__all__ = ["PROVIDER_ID", "StripeIssuingAdapter"]
