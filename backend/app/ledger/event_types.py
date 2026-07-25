@@ -16,6 +16,13 @@ INTENT_TRANSITIONED = "funding_intent.transitioned"
 INTENT_RETRIED = "funding_intent.retried"
 INTENT_ILLEGAL_TRANSITION = "funding_intent.illegal_transition"
 
+# --- card actions we initiate (phase 2) ------------------------------------
+CARDHOLDER_CREATED = "cardholder.created"
+CARD_CREATED = "card.created"
+CARD_ACTIVATED = "card.activated"
+CARD_FROZEN = "card.frozen"
+CARD_CANCELED = "card.canceled"
+
 # --- webhook receipt (phase 2) ---------------------------------------------
 WEBHOOK_DEAD_LETTERED = "webhook.dead_lettered"
 
@@ -34,6 +41,11 @@ def provider_event(normalized_type: str) -> str:
 
 
 __all__ = [
+    "CARDHOLDER_CREATED",
+    "CARD_ACTIVATED",
+    "CARD_CANCELED",
+    "CARD_CREATED",
+    "CARD_FROZEN",
     "INTENT_CREATED",
     "INTENT_ILLEGAL_TRANSITION",
     "INTENT_RETRIED",

@@ -2,37 +2,21 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 import httpx
-import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_session
 from app.core.money import Money
 from app.funding.machine import advance, create_intent
 from app.funding.states import FundingState
 from app.ledger.writer import record
-from app.main import create_app
 
 
-@pytest.fixture
-async def client(session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
-    app = create_app()
-
-    async def _session_override() -> AsyncIterator[AsyncSession]:
-        yield session
-
-    app.dependency_overrides[get_session] = _session_override
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://stablecard.test") as http:
-        yield http
-
-
-async def test_healthz_reports_database_connectivity(client: httpx.AsyncClient) -> None:
+async def test_healthz_reports_dependency_connectivity(client: httpx.AsyncClient) -> None:
+    # Redis joins the probe in phase 2: a receiver that cannot dedup is worse than
+    # one that is down, so "up but no Redis" must not read as healthy.
     response = await client.get("/healthz")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "database": "ok"}
+    assert response.json() == {"status": "ok", "database": "ok", "redis": "ok"}
 
 
 async def test_empty_ledger_returns_an_empty_page(client: httpx.AsyncClient) -> None:

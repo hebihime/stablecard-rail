@@ -63,12 +63,16 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["REDIS_URL"] = TEST_REDIS_URL
 os.environ.setdefault("ENVIRONMENT", "test")
 
+import httpx  # noqa: E402
 from redis.asyncio import Redis  # noqa: E402
 
+from app.core.db import get_session  # noqa: E402
+from app.core.redis import get_redis  # noqa: E402
 from app.funding.models import FundingIntent  # noqa: E402
 from app.funding.states import FundingState  # noqa: E402
 from app.issuers import registry  # noqa: E402
 from app.issuers.evm_deposit_mock import EvmDepositMockAdapter  # noqa: E402
+from app.main import create_app  # noqa: E402
 from app.webhooks import dispatch  # noqa: E402
 from tests.support import SeedIntent  # noqa: E402
 
@@ -191,6 +195,31 @@ def mock_adapter() -> EvmDepositMockAdapter:
     adapter = registry.get_adapter("evm_deposit_mock")
     assert isinstance(adapter, EvmDepositMockAdapter)
     return adapter
+
+
+@pytest.fixture
+async def client(
+    sessionmaker: async_sessionmaker[AsyncSession], redis_client: Redis
+) -> AsyncIterator[httpx.AsyncClient]:
+    """The real app, wired to the test database and Redis.
+
+    A session per request, as in production: routes that commit must not depend on
+    sharing one session with the test.
+    """
+    app = create_app()
+
+    async def _session_override() -> AsyncIterator[AsyncSession]:
+        async with sessionmaker() as request_session:
+            yield request_session
+
+    async def _redis_override() -> AsyncIterator[Redis]:
+        yield redis_client
+
+    app.dependency_overrides[get_session] = _session_override
+    app.dependency_overrides[get_redis] = _redis_override
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://stablecard.test") as http:
+        yield http
 
 
 @pytest.fixture
