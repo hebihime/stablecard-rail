@@ -80,7 +80,7 @@ filterwarnings = ["error"]
 # adds its own package as it lands.
 [tool.coverage.run]
 branch = true
-source = ["app/funding", "app/issuers", "app/ledger", "app/webhooks"]
+source = ["app/chain", "app/funding", "app/issuers", "app/ledger", "app/webhooks"]
 
 [tool.coverage.report]
 show_missing = true

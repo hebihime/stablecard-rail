@@ -1382,3 +1382,72 @@ deserves no guess. The engine treats those as a third case: it leaves the intent
 its current state rather than failing it, and the reconciler (§5.3) picks it up. That
 keeps a deploy-time `AttributeError` from permanently killing every in-flight intent,
 which is what "unknown means failed" would have done.
+
+### 9.2 The bridge interface is two calls, and three states
+
+`BridgeProvider` is `submit(order)` and `status(bridge_ref)`. That is the shape
+every bridge and aggregator actually offers, because a cross-chain transfer cannot
+be synchronous: the source chain has to finalize before the destination chain can
+be told anything at all.
+
+What was deliberately left out is more interesting than what is in:
+
+- **No quote or route-selection call.** LiFi and deBridge both expose one, and a
+  production integration would use it — but the funding engine has no decision to
+  make with a quote. It has one route and one destination, and an amount it did not
+  choose. Adding the call now would mean designing a fee-and-route model against a
+  provider we have not integrated yet (phase 6), which is how an interface ends up
+  shaped like the first implementation.
+- **No milestone states.** `BridgeStatus` is `PENDING`, `COMPLETED`, `FAILED` and
+  nothing else. Real bridges report source-confirmed, relayer-picked-up,
+  destination-submitted — different sets, in different orders, per protocol. The
+  funding machine's own `BRIDGING` covers all of them, and a status enum that
+  mirrors one provider's milestones cannot hold the next one's.
+- **No chain taxonomy.** `source_chain` and `destination_chain` are opaque strings
+  (`"solana-devnet"`, `"gnosis-chiado"`), like provider ids. A route is something a
+  provider either supports or does not; enumerating chains before phase 6 has to
+  negotiate a real one would be enumerating them blind.
+
+**`amount_in` and `amount_out` are separate fields**, and `amount_out` is `None`
+until the transfer completes. SPEC.md §11 names "bridged amounts net of fees" as a
+reconciliation concern, and this is where it becomes concrete: the engine funds the
+card with what *arrived*, never with what was deposited. One amount that quietly
+changes meaning between submit and completion would make the fee invisible exactly
+where it matters. The simulator can charge a fee (`SIMULATED_BRIDGE_FEE_MINOR`) so
+that path is exercised before phase 6 makes it real.
+
+### 9.3 No bridge registry, and who the destination is
+
+`issuers/` has a registry; `chain/bridge/` does not, and the difference is what the
+identifier is *for*. A `provider_id` is written onto every funding intent and every
+ledger row, so it must be resolvable from stored data years later — that is what
+`registry.get_adapter()` exists to do. Which bridge this process uses is a
+deployment choice made once at startup. So the engine takes a `BridgeProvider` as
+an argument and the composition root picks one; phase 6 adds an implementation and
+changes one line in a demo script rather than adding a second lookup table.
+
+**The destination address depends on the funding model** (§3.2), which is the point
+where the bridge and the issuer taxonomy meet:
+
+| Issuer's funding model | Bridge delivers to | Then funding is |
+| --- | --- | --- |
+| `CRYPTO_DEPOSIT` (Gnosis Pay) | the card's own deposit address | arrival itself — `fund_card` observes it (§7.1) |
+| `FIAT_RAIL` (Lithic, Stripe) | our own settlement address | a separate API call the engine makes |
+
+Both paths run the same four transitions, which is why the engine does not branch
+on the taxonomy: it asks the adapter to fund and lets the adapter decide what that
+means. The difference shows up only in which address goes on the order.
+
+### 9.4 The simulator is deterministic, not random
+
+A failure rate would have been fewer lines. It would also mean a demo that fails
+one run in ten for reasons the person watching cannot see, and a test suite that
+goes red on someone else's machine. So: latency is measured against a clock the
+caller supplies, and failure is a **mode** the caller selects. The same order
+produces the same references, the same amounts and the same sequence of states
+every time, and a test can move an hour in one line instead of sleeping.
+
+The four modes are the four shapes a real bridge fails in, and `STUCK` is the one
+worth having — accepted, then silence. Nothing distinguishes a stuck transfer from
+a slow one except elapsed time, which is the entire argument for SPEC.md §5.3's
+reconciler, and this is what lets the reconciler be tested rather than asserted.
