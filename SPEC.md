@@ -69,7 +69,7 @@ Design rule (mirrors the target role's requirement): **adding a new issuer = one
 
 1. **`lithic.py`** — Lithic sandbox. Real API calls: cardholder, virtual card create/activate/freeze/cancel, simulated authorizations, webhook signature verification (their HMAC scheme).
 2. **`stripe_issuing.py`** — Stripe Issuing test mode. Same lifecycle; verify `Stripe-Signature`; use Stripe's test helpers to simulate authorizations and 3DS-style flows where available.
-3. **`evm_deposit_mock.py`** — a mock adapter modeling the crypto-funded issuer pattern (provider assigns an EVM/BSC deposit address per program; funding = confirmed token deposit at that address). Implements the same interface; runs a small in-process simulator with its own signed webhooks so the full pipeline works offline. This adapter exists to prove the abstraction covers both `FIAT_RAIL` and `CRYPTO_DEPOSIT` funding models.
+3. **`gnosis_pay_mock.py`** — a mock adapter modeling the Gnosis Pay partner pattern, with its API surface shaped by Gnosis Pay's public documentation (https://docs.gnosispay.com — they expose an `/llms.txt` index; read the card-order, card-management, and PSE pages before writing this adapter). Key characteristics to model: `CRYPTO_DEPOSIT` funding via a per-user Safe smart account on an EVM chain (funding = confirmed stablecoin deposit to the Safe, not an API call — `fund_card` therefore verifies/records the on-chain deposit rather than moving money); card lifecycle endpoints (order, activate, freeze, report lost/cancel); and a PSE-style secure reveal (backend issues a short-lived ephemeral token, client renders card data — see §9). Runs a small in-process simulator with its own signed webhooks so the full pipeline works offline. This adapter proves the abstraction covers both `FIAT_RAIL` and `CRYPTO_DEPOSIT` funding models, and doubles as prep for the real integration: it is a faithful shadow of the provider AlemX actually uses.
 
 ### 3.3 Normalized event model
 
@@ -95,7 +95,7 @@ Pipeline: raw-body capture → adapter `verify_webhook` (reject 401 on failure) 
 
 1. **Deposit watcher** (`chain/solana_watcher.py`): polls Solana devnet for USDC transfers to the user's designated deposit ATA (websocket subscription if straightforward, else polling with slot cursor persisted in DB). Confirmed deposit (`finalized` commitment) creates a `FundingIntent` → `DEPOSIT_CONFIRMED`.
 2. **Bridge step**: `BridgeProvider` interface with two implementations:
-   - `debridge.py` (or Wormhole — pick whichever has a working Solana→BSC testnet route at build time; document the choice and why in ARCHITECTURE.md)
+   - `debridge.py` (or another live protocol — research at build time which bridge/aggregator currently supports a Solana→Gnosis Chain route, since Gnosis Chain is the destination in the real product; LiFi/Jumper aggregate routes and deBridge lists Gnosis support. Testnet routes to Gnosis's Chiado testnet may not exist — if so, implement the real adapter against any available Solana-devnet→EVM-testnet route to prove the mechanics, and document the mainnet route choice in ARCHITECTURE.md)
    - `simulated.py` — deterministic simulator with configurable latency/failure injection, so the end-to-end demo never depends on third-party testnet uptime.
    The engine treats them identically. `BRIDGING → BRIDGED` on destination confirmation.
 3. **Card funding**: engine calls the intent's issuer adapter `fund_card` with an idempotent `funding_ref` (the intent id). `FUNDING → FUNDED`.
@@ -131,7 +131,7 @@ Mobile-side signing of the deposit transaction uses the wallet available in the 
 Three screens + one modal, hitting the backend API:
 
 1. **Card screen** — virtual card visual, masked PAN, balance (from `get_balance`), freeze/unfreeze toggle.
-2. **Card detail reveal** — full PAN/CVV fetched via a short-lived, single-use reveal token from the backend; auto-hide after a countdown; screenshot-guard flag on the screen where the platform supports it.
+2. **Card detail reveal** — full PAN/CVV fetched via a short-lived, single-use reveal token from the backend; auto-hide after a countdown; screenshot-guard flag on the screen where the platform supports it. Structure this deliberately as the Gnosis Pay PSE pattern: backend endpoint mints the ephemeral token (stand-in for their mTLS-authenticated PSE token call), client exchanges it for card data in an isolated component — so the demo's reveal flow is architecturally identical to the real partner integration.
 3. **Fund screen** — shows the Solana devnet deposit address (QR + copy), triggers a devnet USDC transfer via the in-app wallet (local keypair for the demo; Fireblocks NCW SDK if §8 stretch lands), then live-renders the funding intent's state machine progress (PENDING → … → FUNDED) by polling the intent endpoint.
 4. **3DS OTP modal** — appears on push/poll, shows the code, copy button, approve/decline.
 
@@ -150,7 +150,7 @@ Include at least one small native-module touchpoint (e.g., secure storage via Ke
 ## 11. Documentation deliverables
 
 - `README.md` — what this is (sandbox demo mirroring a production card-funding architecture), badge row, quickstart, screen recordings/GIFs of the full flow.
-- `docs/ARCHITECTURE.md` — one diagram of the pipeline, the adapter registry design, why CCTP can't serve a Solana→BSC route and what that implies for reconciliation, funding-model taxonomy (fiat-rail vs crypto-deposit issuers), Kafka-vs-Redis-Streams note.
+- `docs/ARCHITECTURE.md` — one diagram of the pipeline, the adapter registry design, the funding-model taxonomy (fiat-rail issuers like Lithic/Stripe vs crypto-deposit issuers like Gnosis Pay, where funding is an on-chain Safe deposit rather than an API call), why native CCTP can't serve a Solana→Gnosis Chain route and what a third-party bridge implies for reconciliation (bridged amounts net of fees, retry semantics, finality differences), Kafka-vs-Redis-Streams note.
 - `docs/DEMO.md` — exact steps to run the end-to-end flow with only free credentials.
 
 ## 12. Build phases (each ends green: tests pass, CI passes, demo-able)
