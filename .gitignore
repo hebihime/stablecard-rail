@@ -7,6 +7,11 @@
 *.keypair.json
 id_*.json
 
+# --- local working notes: machine-specific, in-flight, not the durable record ---
+# The committed record is SPEC.md, docs/ARCHITECTURE.md and docs/DEMO.md.
+WORKLOG.local.md
+*.local.md
+
 # --- python ---
 __pycache__/
 *.py[cod]
