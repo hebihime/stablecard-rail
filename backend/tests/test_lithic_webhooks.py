@@ -26,6 +26,7 @@ ledger says what actually arrived (SPEC.md §3.3).
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -149,6 +150,24 @@ async def test_an_adapter_with_no_secret_configured_verifies_nothing(
     # and must not raise either, or the endpoint answers 500 where it means 401.
     body = body_of(lifecycle_payload())
     assert not await unsecured.verify_webhook(headers_for(body), body)
+
+
+async def test_the_refusal_says_which_variable_to_set(
+    unsecured: LithicAdapter, caplog: pytest.LogCaptureFixture
+) -> None:
+    # `verify_webhook` returns a bare False, so the log line is the *only* thing that
+    # tells an operator the difference between "this delivery was forged" and "you never
+    # set the secret". It has existed since phase 3 and had never been observed by a
+    # test: `alembic/env.py` ran `fileConfig` with `disable_existing_loggers=True`, so
+    # migrations switched off every app logger for the whole session and `caplog` came
+    # back empty (docs/ARCHITECTURE.md §8.9). Now that logging survives, this is the
+    # test that phase 3 should have had.
+    body = body_of(lifecycle_payload())
+
+    with caplog.at_level(logging.WARNING):
+        assert not await unsecured.verify_webhook(headers_for(body), body)
+
+    assert "LITHIC_WEBHOOK_SECRET" in caplog.text
 
 
 async def test_the_dedup_id_is_the_webhook_id_header(adapter: LithicAdapter) -> None:

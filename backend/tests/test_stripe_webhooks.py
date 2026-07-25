@@ -201,19 +201,16 @@ async def test_a_tampered_body_is_refused(adapter: StripeIssuingAdapter) -> None
 
 
 async def test_an_unconfigured_endpoint_fails_closed(
-    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     # An account with no endpoint secret yet has nothing to verify against, and
     # accepting unverifiable deliveries would let anyone write to the ledger. The
     # warning names the variable, because that is the actual fix.
     #
-    # The logger has to be switched back on first: `alembic/env.py` calls
-    # `fileConfig` with its default `disable_existing_loggers=True`, so running
-    # migrations — which the session-scoped `migrated_database` fixture always does
-    # — disables every logger the app created at import time, both adapters'
-    # included. Fixing that is a one-line change in `alembic/env.py` and therefore
-    # not this phase's to make; it is reported instead.
-    monkeypatch.setattr(stripe_adapter.logger, "disabled", False)
+    # This test needed `monkeypatch.setattr(logger, "disabled", False)` until
+    # `alembic/env.py` was given `disable_existing_loggers=False`. Its absence is now
+    # the regression test for that: if the migration setup ever switches app loggers
+    # off again, `caplog.text` comes back empty and this fails.
     body = fixture_bytes("event_transaction_created")
     unconfigured = make_adapter(secret="")
 

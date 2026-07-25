@@ -24,7 +24,14 @@ from app.core.db import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False` matters more than it looks. The default is
+    # True, which switches off every logger that already exists when this runs — and
+    # in the test suite that is all of them, because the session-scoped
+    # `migrated_database` fixture runs migrations after `app.*` has been imported.
+    # The symptom was that no adapter's fail-closed webhook warning could be observed
+    # by any test: `caplog.text` came back empty while the same call logged correctly
+    # outside pytest. Found in phase 4 (docs/ARCHITECTURE.md §8.9).
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
