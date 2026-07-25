@@ -49,6 +49,8 @@ os.environ.setdefault("ENVIRONMENT", "test")
 
 from app.funding.models import FundingIntent  # noqa: E402
 from app.funding.states import FundingState  # noqa: E402
+from app.issuers import registry  # noqa: E402
+from app.issuers.evm_deposit_mock import EvmDepositMockAdapter  # noqa: E402
 from tests.support import SeedIntent  # noqa: E402
 
 TRUNCATED_TABLES = "ledger_events, funding_intents"
@@ -122,6 +124,31 @@ async def session(
 ) -> AsyncIterator[AsyncSession]:
     async with sessionmaker() as db_session:
         yield db_session
+
+
+@pytest.fixture(autouse=True)
+def isolated_issuer_registry() -> Iterator[None]:
+    """Restore the adapter registry, and hand every test a fresh provider.
+
+    The mock adapter keeps its simulator in memory, so without this a card
+    created in one test would still exist in the next.
+    """
+    snapshot = dict(registry._FACTORIES)
+    registry.reset_instances()
+    try:
+        yield
+    finally:
+        registry._FACTORIES.clear()
+        registry._FACTORIES.update(snapshot)
+        registry.reset_instances()
+
+
+@pytest.fixture
+def mock_adapter() -> EvmDepositMockAdapter:
+    """The registered mock provider — the same instance the receiver resolves."""
+    adapter = registry.get_adapter("evm_deposit_mock")
+    assert isinstance(adapter, EvmDepositMockAdapter)
+    return adapter
 
 
 @pytest.fixture

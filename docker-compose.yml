@@ -41,6 +41,9 @@ services:
       DATABASE_URL: >-
         postgresql+asyncpg://${POSTGRES_USER:-stablecard}:${POSTGRES_PASSWORD:-stablecard}@postgres:5432/${POSTGRES_DB:-stablecard}
       REDIS_URL: redis://redis:6379/0
+      WEBHOOK_SIGNATURE_TOLERANCE_SECONDS: ${WEBHOOK_SIGNATURE_TOLERANCE_SECONDS:-300}
+      EVM_DEPOSIT_MOCK_WEBHOOK_SECRET: >-
+        ${EVM_DEPOSIT_MOCK_WEBHOOK_SECRET:-dev-mock-webhook-secret-not-a-credential}
     ports:
       - "${BACKEND_HOST_PORT:-8000}:8000"
     depends_on:
