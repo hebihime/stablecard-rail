@@ -7,6 +7,11 @@ This document is the running record of design decisions. Sections marked
 **deferred** land with the phase that builds them (see SPEC.md §12); everything
 else is decided and implemented.
 
+Sections are grouped by when they were decided: §2 phase 1, §3 phase 2, §4 phase 3,
+§7 the refactor that followed SPEC.md's revision to name Gnosis Pay as the target
+provider. §5 (deferred) and §6 (the module rule) are standing sections. Earlier
+sections are not rewritten when a later one changes something; they point forward.
+
 ---
 
 ## 1. Target pipeline
@@ -94,7 +99,7 @@ marks `FAILED_*`"):
   the others are instantaneous hand-offs with nothing to re-poll.
 - **`FAILED_*` is terminal.** A failed intent is a closed record; recovery means
   opening a new intent. Reopening a failure would let the ledger overwrite its own
-  account of what happened, which defeats the point of §7.
+  account of what happened, which defeats the point of SPEC.md §7.
 
 `DEPOSIT_CONFIRMED → FAILED_BRIDGE` and `BRIDGED → FAILED_FUNDING` exist so a
 submission that fails before the work starts still lands in the right bucket.
@@ -611,6 +616,9 @@ Two related decisions in the same place:
   check it against — so `amount` is `None` and the provider's own numbers stay in
   `raw` for phase 7 to convert where it displays them.
 
+Phase 3 ends here. What SPEC.md's revision then changed — and the abstraction defect
+it exposed, which phase 4 would otherwise have failed on — is §7.
+
 ---
 
 ## 5. Deferred decisions
@@ -644,6 +652,11 @@ Recorded here when their phase lands, per SPEC.md §11:
   not have.
 - **Signer**: `LocalKeypairSigner` (default) and `FireblocksSigner` behind one
   `TransactionSigner` interface — phases 5 and 9.
+- **Resolving a deposit to a card.** One Safe per user means `deposit_address → card`
+  is many-to-one (§7.6), so phase 5's watcher needs a second discriminator — most
+  likely the funding intent's own amount and card, since the deposit itself carries
+  neither.
+- **A `reveal` on the issuer interface**, once phase 8 has a caller for it (§7.7).
 
 Deliberately out of scope for the whole project, as production-path items:
 Kafka itself, real KYC, physical cards.
@@ -659,4 +672,212 @@ design bug in the abstraction, not something to patch around (SPEC.md §12 phase
 exists to test exactly this).
 
 Enforced by `tests/test_module_boundaries.py`, which parses the import graph rather
-than trusting review.
+than trusting review — and, since §7.4, the settings graph too.
+
+---
+
+## 7. Decisions recorded in the SPEC-revision refactor
+
+SPEC.md was revised after phase 3: §3.2's third adapter is `gnosis_pay_mock`, shaped
+on Gnosis Pay's public documentation, in place of a generic `evm_deposit_mock`, and
+§5.2's bridge destination is Gnosis Chain rather than BSC. Naming a real target
+provider turned the mock from an invention into a rehearsal, and that is what made
+the following visible. Sections 1–4 above are left as the record of what was decided
+when; where they described behaviour this refactor changed, they now point here.
+
+### 7.1 Funding at a crypto-deposit issuer is an observation, not an action
+
+The old mock's `fund_card` credited a balance and emitted a settlement webhook. That
+is a fiat rail with a crypto-sounding label, and it was quietly holding the
+`CRYPTO_DEPOSIT` half of the taxonomy up with nothing underneath: a provider whose
+`fund_card` can create money is not testing the abstraction against a second shape,
+it is testing it against the first shape twice.
+
+At a real crypto-deposit issuer money arrives by an on-chain transfer to an address
+the provider controls, and the provider's API cannot make one happen. So:
+
+- `receive_onchain_deposit(safe_address, amount, confirmed=)` is **the chain**, not
+  an endpoint. Nothing in `app/` calls it; the bridge (phase 6) is what will make it
+  happen for real, and until then a demo or a test plays that part.
+- `fund_card` verifies and attributes. It looks for the oldest confirmed,
+  unattributed deposit that covers the amount, marks it with our `funding_ref`, and
+  returns `SUCCEEDED` with the transaction hash as the issuer's reference.
+- With no such deposit the answer is `PENDING`, which the funding engine already
+  treats as "not yet funded" and waits on. Nothing is refused and nothing is
+  invented.
+- `test_funding_does_not_move_money` asserts the balance is unchanged across a
+  funding call, so the property cannot quietly stop holding.
+
+Whole-deposit attribution, not partial: a larger deposit is consumed entirely rather
+than split. Netting a bridged amount against fees and splitting the remainder is
+phase 6's reconciliation problem (SPEC.md §11), and guessing at it now would bake in
+an answer before the question exists.
+
+The consequence worth flagging for phase 5: `PENDING` is a *normal* answer here, not
+an error, so the engine's `FUNDING` state has to be able to sit in it and retry
+rather than treating a non-success as a failure.
+
+### 7.2 A provider with no event id in its envelope
+
+Gnosis Pay's webhook envelope is `{eventType, data}`. There is no event id and no
+timestamp anywhere in the body; the timestamp lives only in the signed
+`x-webhook-timestamp` header. Two things follow.
+
+**`parse_webhook(headers, body)` is vindicated.** Phase 3 widened the interface for
+Lithic (§4.1) and treated it as the abstraction's one allowed change. A second
+provider needing the same thing for a different reason is the strongest evidence the
+change was structural rather than a concession: this adapter could not be written
+against a body-only signature at all.
+
+**Dedup keys on a digest of the body.** `webhook_event_id` returns
+`sha256(body).hexdigest()` — the receiver's own documented fallback, returned
+explicitly rather than by inheriting `None`, so the ledger's `event_id` and the Redis
+dedup key are provably the same value. The body alone, deliberately: their retries
+(1, 5 and 15 minutes) are re-signed with a fresh timestamp, so including the
+timestamp would make every retry look like a new event. The trade is that two
+genuinely distinct events with byte-identical payloads would collide — acceptable
+because their payloads carry `threadId` and timestamps, and far better than the
+alternative, which double-counts money.
+
+One thing to expect when this becomes a real integration: their webhooks name a card
+by `cardToken` while every REST path names it by `cardId`, so the adapter has to
+resolve one to the other. In-process that is a dictionary lookup; against a real API
+it is an HTTP call, which would make `parse_webhook` fail for network reasons — and
+the receiver calls it a second time for duplicate deliveries, so it must stay cheap.
+A cache keyed on the token, populated at card creation, is the likely answer.
+`gnosis_pay_mock` leaves `card_id` unresolved rather than guessing when the token is
+unknown, and keeps the token in `raw` either way.
+
+### 7.3 Real Ed25519, and a derived keypair
+
+Gnosis Pay signs webhooks with Ed25519 over `"{timestamp}.{body}"`, base64 in
+`x-webhook-signature`, and publishes the verifying key at
+`webhooks.gnosispay.com/api/v1/public-key`. The mock first approximated this with
+HMAC-SHA256, keeping the headers, encoding, signed material and window and swapping
+only the primitive, because the standard library has no Ed25519.
+
+That approximation lost the property worth modelling. An asymmetric scheme means a
+partner holds **no signing secret at all** — nothing to leak, rotate or
+misconfigure. Reproducing that is the difference between rehearsing the integration
+and rehearsing its shape, so `cryptography` was added (SPEC.md §2 dependency,
+approved) and the scheme implemented as documented. The simulator holds the private
+key; the adapter is handed the public half and verifies with it, and a test asserts
+the adapter has no private key anywhere in its instance state.
+
+`simulator.public_key_endpoint()` reproduces the published response field for field
+(`{"success": true, "publicKey": "<SPKI PEM>", "algorithm": "ed25519"}`, checked
+against the live endpoint on 2026-07-25), so the shape is written down where the real
+integration will need it.
+
+**The keypair is derived from a seed, not generated.** This is the one place the mock
+is deliberately unfaithful. `scripts/demo_phase2.py` signs a delivery in one process
+for a running server to verify in another; a fresh keypair per process would break
+exactly the demo the mock exists for. The seed is a constant in `signing.py` and is
+not a credential — it authenticates a Python object in this process to itself.
+
+Two smaller decisions in the same place: `base64.b64decode(validate=True)`, because
+`b64decode` silently drops characters outside the alphabet and would otherwise accept
+a signature with junk spliced into it; and `load_public_key` *raises* on a
+non-Ed25519 PEM rather than returning False, because a wrong key type is a
+misconfiguration to fix, not a delivery to reject.
+
+### 7.4 Adapter-owned configuration — the coupling the import graph could not see
+
+`app/core/config.py` carried `lithic_api_key`, `lithic_webhook_secret`,
+`lithic_api_base_url`, `lithic_request_timeout_seconds` and
+`evm_deposit_mock_webhook_secret`. So "adding an issuer is one adapter file plus one
+registry entry" had never been literally true: every adapter cost a change to
+`core/`, and phase 4 would have cost two more before Stripe wrote a line.
+
+None of the boundary tests could see it. The coupling ran adapter →
+`get_settings()` → a field named after the adapter, and never as an import of the
+adapter — so an import-graph test looking for `app.issuers.lithic` in `core/` found
+nothing. The proof that it was invisible rather than merely tolerated:
+`evm_deposit_mock_webhook_secret` outlived the adapter it was named for, sitting in
+`config.py`, `.env.example` and `docker-compose.yml` read by nobody.
+
+The fix is that each adapter package declares its own `BaseSettings` under its own
+env prefix (`app/issuers/lithic/config.py`). Variable names are unchanged —
+`LITHIC_API_KEY` is still `LITHIC_API_KEY`, because the prefix carries the provider's
+name — so this is an ownership change, not a migration for anyone deploying.
+
+Two new guards close the class from both ends:
+
+- **No field in `core/config.py` may be named after an adapter package.** Catches the
+  leftover-dead-field case directly.
+- **No module under `issuers/` may import `app.core.config` at all.** The structural
+  half: an adapter that cannot see the app's settings cannot add a field to them.
+  `app.core.money` stays available, because `Money` is shared vocabulary whereas
+  settings are ownership.
+
+Both were checked by reintroducing the defect and watching them fail, which is the
+only way to know a guard guards anything.
+
+The signature receiving window moved with them. Only adapters ever read it, and it
+has to suit one provider's clock skew and retry schedule at a time, so
+`WEBHOOK_SIGNATURE_TOLERANCE_SECONDS` became `LITHIC_SIGNATURE_TOLERANCE_SECONDS` and
+`GNOSIS_PAY_MOCK_SIGNATURE_TOLERANCE_SECONDS`. The cost is a duplicated default of
+300 per adapter, and the `.env` locations repeated in each settings class rather than
+imported from `core/` — cheaper than a shared config module every adapter depends on,
+which is §4.2's argument applied to configuration.
+
+`LITHIC_API_KEY` stays documented in `.env.example`. The rule that every variable
+read by code is documented there outranks tidiness; the file now records which
+package declares each block.
+
+### 7.5 `FundingResult.issuer_funding_ref` is optional
+
+A crypto-deposit provider asked to fund before a deposit confirms has no
+provider-side object to name, and the mock was returning `""` — a string claiming a
+reference exists and is nameless. The field is now `str | None`, and `None` means
+nothing has been observed yet.
+
+`FundingIntent.issuer_funding_ref` has been nullable since phase 1 for exactly this
+reason, so the DTO and the column now agree instead of routing every `PENDING` result
+through a sentinel on its way to a NULL. This is the interface's one breaking change
+in this pass; Lithic always has a real reference and was unaffected.
+
+### 7.6 What Gnosis Pay does not publish
+
+The mock is shaped on public documentation, and where that documentation stops the
+gap is marked rather than filled in quietly. Anyone integrating for real should treat
+each of these as a question for the provider:
+
+- **The `statusCode` ↔ `statusName` pairing.** They publish both sets but only the
+  pair `1000 = Active`. The mock assigns the rest, and the *adapter* therefore reads
+  the boolean flags (`isFrozen`, `isLost`, `isStolen`, `isVoid`) and never the number
+  — so a wrong guess cannot mislabel whether a card can spend money.
+- **Token contract addresses.** Omitted entirely rather than invented. `decimals`
+  (EURe/GBPe 18, USDCe 6) are labelled representative, not verified.
+- **3DS and chargeback webhooks.** They document a dispute *endpoint* but no matching
+  webhook, and publish no 3DS event at all — yet SPEC.md §3.3 requires both types and
+  §6 needs the 3DS path in phase 7. Both are emitted by the simulator under
+  `EXTENSION_EVENT_TYPES`, labelled as ours.
+- **Physical card ordering** is deliberately not modelled: SPEC.md §2 excludes
+  physical cards, and `POST /api/v1/cards/virtual` bypasses the order flow anyway.
+
+Three provider facts that do reach the rest of the system, and will matter later:
+
+- **One Safe per *user*, not per card.** `Card.deposit_address` repeats across a
+  user's cards, so phase 5's `deposit_address → card` index (§3.4) is many-to-one and
+  cannot resolve a deposit to a single card by address alone.
+- **No per-card spend limit.** `spend_limit_minor` becomes the Safe's on-chain daily
+  limit, which every card of that user shares. Tested, so the sharing is visible
+  rather than surprising.
+- **Amounts are BigInt token units with a per-currency `decimals`**, not minor units.
+  `to_money` refuses a value finer than a minor unit rather than rounding — a
+  rounding rule here would be a silent, permanent leak. USDCe is the default so the
+  demo stays USD-denominated end to end, matching Solana USDC's 6 decimals.
+
+### 7.7 The PSE reveal lives on the simulator only
+
+Gnosis Pay's reveal is a Payment Service Element: the partner backend calls
+`POST /api/v1/ephemeral-token` under mTLS, gets a 60-second single-use token, and the
+client renders card data in an isolated component. SPEC.md §9.1 now asks for the
+demo's reveal to be architecturally identical.
+
+The simulator implements it — TTL, single use, and a distinct error for "already
+redeemed" versus "never existed", because those are different incidents. There is no
+`reveal` method on `CardIssuerAdapter`, because there is no caller until phase 8 and
+adding one now would mean guessing at its shape while every other adapter inherits
+the guess.

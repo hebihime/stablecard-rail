@@ -61,7 +61,7 @@ async def list_ledger_events(
     if event_type is not None:
         statement = statement.where(LedgerEvent.event_type == event_type)
 
-    # Ascending id: the ledger reads as a story, which is the point of §7.
+    # Ascending id: the ledger reads as a story, which is the point of SPEC.md §7.
     result = await session.execute(statement.order_by(LedgerEvent.id).limit(limit))
     events = [LedgerEventOut.model_validate(row) for row in result.scalars().all()]
     return LedgerPage(count=len(events), events=events)
