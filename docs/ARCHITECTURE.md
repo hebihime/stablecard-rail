@@ -2117,15 +2117,19 @@ a refusal is not the same as lost money, and the VAA remains the key to it.
 
 Recorded plainly, in the spirit of §8.9.
 
-**No real transfer has been sent.** The route is verified against both chains —
-`scripts/demo_phase6.py` does it in six read-only calls, and it passes — but moving
-devnet USDC through it needs two funded testnet keys that this environment does not
-have: `SOLANA_DEPOSIT_KEYPAIR` with devnet USDC and SOL, and
-`EVM_REDEEMER_PRIVATE_KEY` with test BNB. `--transfer` says which is missing and
-stops rather than half-running. What that leaves unverified is specifically the
-parts a fixture cannot stand in for: that the built transaction is accepted by the
-program (as opposed to being byte-identical to one that was), that the guardians
-sign our message, and that `completeTransfer` succeeds against a VAA of ours.
+**A real transfer has been sent, and the destination leg has not run.** The source
+half is verified end to end: a `simulateTransaction` returned `err: null` and logged
+`Sequence:` before any SOL was spent — so the hand-built transaction is *accepted by
+the programs*, not merely byte-identical to one that was — and then a real transfer
+of 0.100000 USDC went out and **the guardians signed it** (sequence 56912, digest
+`69d34b7e…`). Both of those were listed here as unverifiable an hour earlier.
+
+What remains is the redemption: `completeTransfer` against a VAA of ours has never
+run, because the address that pays destination gas holds 0.000001 tBNB and one
+redemption costs about 0.0000187 (155,633 gas plus the 1.2 headroom, at 0.1 gwei).
+The transfer is intact and waiting — 0.1 USDC in the Token Bridge's custody account,
+a signed VAA that does not expire, and `demo_phase6.py --resume 1/…/56912` to finish
+it. That path exists *because* §10.2's point 2 says it must.
 
 **The "already completed" revert is a prediction.** `RedemptionRefused` is exercised
 against a real revert — *VM version incompatible*, from the real contract, recorded
@@ -2139,7 +2143,46 @@ is authoritative and the string is not.
 guardian; mainnet has nineteen. The VAA parser handles the count generically and a
 test pins the one-signature case, but a mainnet-shaped VAA has never been through it.
 
-**Finality timing is unmeasured.** §10.2 point 5 says
+**Finality timing is only half measured.** §10.2 point 5 says
 `RECONCILER_STUCK_AFTER_SECONDS` has to exceed Solana finality plus guardian quorum
-plus BSC inclusion, and the current default (120s) is a guess that was never a
-measurement. The first real transfer is what turns it into one.
+plus BSC inclusion. The first two are now observed rather than guessed: the message
+account was readable at `finalized` and the VAA was signed **within about thirty
+seconds** of the send. BSC inclusion is still unmeasured, so the 120s default is
+better founded than it was and is not yet a measurement.
+
+### 10.7 What the first live transfer found
+
+Three bugs, and the interesting thing about all three is that no fixture could have
+shown them — a stubbed node answers instantly, never runs out of money, and never
+says "I already have that transaction".
+
+**1. `submit` reported a failure on the happy path.** `sendTransaction` returns when
+a node *accepts* a transaction; the message account is read at `finalized`, which
+trails by about thirteen seconds. Reading once and giving up meant every healthy
+first submit raised. The engine would have recovered — the duplicate-submit path
+finds the account and reads the sequence back, which is §10.4 working exactly as
+designed — but it burned a retry and looked like a defect, because it was one. It
+polls now, and still at `finalized` rather than the much faster `confirmed`: the
+sequence read there *becomes* the `bridge_ref`, a confirmed block can still be
+dropped, and the guardians will not sign before finality anyway, so the wait costs
+nothing that was not going to be waited for.
+
+**2. An underfunded redeemer was classified as permanent, which would have stranded
+locked money.** `eth_estimateGas` succeeds even when the sender cannot pay — BSC does
+not check balance there — so the failure appears at the send as `-32000`, a code
+covering half a dozen unrelated conditions and therefore treated as non-retryable.
+An empty hot wallet would have marked an intent `FAILED_BRIDGE` while its USDC sat
+recoverable behind a VAA that never expires. That is §10.2's point 2 arriving through
+a door I had not thought of: I had reasoned carefully about *transport* failures and
+not at all about our own operational ones. `OutOfGasMoney` names it, carries
+`retryable=True`, and says what to do. Verified against the real node, which reports
+`insufficient funds for gas * price + value: balance …, overshot …`.
+
+**3. "already known" was read as a failure.** Same nonce, same bytes, same hash, so
+the transaction is already in the pool and there is nothing new to send. The hash is
+a property of the signed bytes, so it can be returned without the node's answer at
+all — which is what turns this from an error into the success it is.
+
+Two smaller ones, both in the demo rather than the adapter: it tracebacked on a
+`BridgeError` instead of reporting it, and its output was invisible when piped,
+because Python buffers stdout and this script polls for minutes.

@@ -2,6 +2,7 @@
 
     python scripts/demo_phase6.py              # verify the route + replay a VAA
     python scripts/demo_phase6.py --transfer   # actually move devnet USDC (spends)
+    python scripts/demo_phase6.py --resume 1/<emitter>/<seq>   # finish one already sent
 
 **The default mode reads two chains and needs no credentials.** It asks Solana
 devnet and whichever EVM testnet `EVM_*` names — BSC testnet by default — the six
@@ -15,6 +16,10 @@ It then replays the recorded VAA to show the two things the integration turns on
 the **double-keccak digest** the destination identifies a transfer by, and the
 **derived message account** that makes `submit` idempotent without any help from
 the protocol.
+
+`--resume 1/<emitter>/<sequence>` finishes a transfer that was already submitted —
+after an interruption, or after topping up the address that pays destination gas.
+Redeeming is idempotent, so running it against a delivered transfer is a no-op.
 
 `--transfer` is the real thing and it spends real testnet money: it submits a
 Solana devnet transfer through the adapter, waits for the guardians, and redeems on
@@ -32,8 +37,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import io
 import json
 import logging
+import sys
 import uuid
 from pathlib import Path
 
@@ -266,10 +273,22 @@ async def live_transfer(amount_minor: int) -> int:
     print(f"\n  accepted as {transfer.bridge_ref}")
     print(f"  source signature {transfer.raw.get('source_signature')}")
 
+    return await drive(bridge, transfer.bridge_ref)
+
+
+async def drive(bridge: WormholeBridge, bridge_ref: str, *, polls: int = 40) -> int:
+    """Poll a transfer to delivery, which is also what redeems it.
+
+    Separate from `submit` so that an interrupted transfer can be finished from its
+    reference alone — `--resume`. §10.2's point 2 says a stalled transfer must
+    always be completable by hand, because the money is locked and the VAA is the
+    only key to it; this is that path, and it is the same code the worker runs.
+    """
     heading("waiting for the guardians, then redeeming")
-    for attempt in range(1, 41):
+    print(f"  transfer {bridge_ref}")
+    for attempt in range(1, polls + 1):
         try:
-            current = await bridge.status(transfer.bridge_ref)
+            current = await bridge.status(bridge_ref)
         except BridgeError as exc:
             # An out-of-gas redeemer lands here, and it is worth showing rather
             # than crashing on: the transfer is intact and waiting.
@@ -288,7 +307,8 @@ async def live_transfer(amount_minor: int) -> int:
             return 1
         await asyncio.sleep(15)
 
-    print("\n  still pending after ten minutes; the reference above is all the worker needs")
+    print(f"\n  still pending after {polls * 15 // 60} minutes. Nothing is lost: re-run with")
+    print(f"  --resume {bridge_ref}")
     return 0
 
 
@@ -314,9 +334,32 @@ async def main() -> int:
     parser.add_argument(
         "--amount", type=int, default=100_000, help="minor units to move; default 0.100000 USDC"
     )
+    parser.add_argument(
+        "--resume",
+        metavar="BRIDGE_REF",
+        help="finish a transfer already submitted, e.g. 1/<emitter>/<sequence>",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s %(message)s")
+    # This script polls for minutes, and Python buffers stdout when it is piped —
+    # so `| tee` or `| head` showed nothing at all until it exited. Line buffering
+    # costs nothing and makes progress visible where it is actually watched.
+    # `reconfigure` is on TextIOWrapper, which is what sys.stdout is in practice
+    # but not what its declared type promises.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(line_buffering=True)
+
+    if args.resume:
+        # No route verification and no VAA replay: this is the operator path for a
+        # transfer that already exists and needs finishing.
+        try:
+            resumed = build_bridge(BridgeChoice.WORMHOLE)
+        except SignerError as exc:
+            print(f"  cannot build the real bridge: {exc}")
+            return 1
+        assert isinstance(resumed, WormholeBridge)
+        return await drive(resumed, args.resume)
 
     print("\033[1mphase 6 — the real bridge: Solana devnet → BSC testnet\033[0m")
     healthy = await verify_route()

@@ -484,8 +484,35 @@ Faucets: devnet SOL from `solana airdrop 1 <address> --url devnet`, devnet USDC 
 USDC lands at the redeemer's own address on BSC testnet, so the balance is visible in
 any explorer.
 
-Without both keys the script says which is missing and stops. **This mode has not
-been run** — see ARCHITECTURE §10.6 for exactly what that leaves unverified.
+Without both keys the script says which is missing and stops.
+
+**Status of this mode:** the source half has run for real — the programs accept the
+transaction (a free `simulateTransaction` says `err: null`) and the guardians signed
+our VAA within about thirty seconds. The redemption has not run, because the address
+that pays destination gas is short by ~0.000018 tBNB. ARCHITECTURE §10.6 is precise
+about what that leaves unverified, and §10.7 lists the three bugs the live run found.
+
+### Finish a transfer that was already sent
+
+```bash
+python scripts/demo_phase6.py --resume 1/<emitter>/<sequence>
+```
+
+Skips the verification and the replay and goes straight to polling, which is also
+what redeems. Use it after an interruption, or after topping up the gas address.
+Redeeming is idempotent — running it against a transfer that is already delivered is
+a no-op, because `isTransferCompleted` is asked before anything is signed.
+
+This path exists because ARCHITECTURE §10.2 point 2 says it has to: once the source
+transaction lands the USDC is in the Token Bridge's custody account and the signed
+VAA is the only key to it, so there must always be a way to finish by hand. An
+out-of-gas redeemer reports itself and leaves the transfer intact:
+
+```
+poll  1  the redeemer 0x890F… cannot pay for this redemption (insufficient funds
+         for gas * price + value: balance 1000000000000, tx cost 18675900000000);
+         top it up and it will be retried
+```
 
 ### Point the funding pipeline at it
 
