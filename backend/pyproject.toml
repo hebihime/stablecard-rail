@@ -29,6 +29,14 @@ dependencies = [
     # `httpx` already here, and writing them keeps the whole thing testable by
     # replaying recorded responses (docs/ARCHITECTURE.md §9.14).
     "solders>=0.21",
+    # Phase 6. A lock-and-mint bridge leaves the destination leg to us, so this
+    # service signs and sends a transaction on an EVM chain — secp256k1 with a
+    # recovery id, keccak-256, and RLP, none of which `cryptography` provides.
+    # Approved by jp when the destination-leg question was put to them; the
+    # alternative was a route nobody redeems (docs/ARCHITECTURE.md §10.2).
+    # `eth-account` and not `web3.py`: the RPC surface is five methods over the
+    # `httpx` already here, which is §4.3's argument unchanged.
+    "eth-account>=0.13",
 ]
 
 [project.optional-dependencies]
