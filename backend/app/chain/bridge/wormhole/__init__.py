@@ -5,7 +5,8 @@ so plainly, and because that limitation is structural to every intent-based rout
 a solver-filled network needs market makers holding inventory on both chains, and
 nobody funds inventory on a testnet. Wormhole's Wrapped Token Transfers is
 lock-and-mint, so it needs no funded third party and can exist on a testnet. It
-does; docs/ARCHITECTURE.md §10.1 records how that was established.
+does — docs/ARCHITECTURE.md §10.1 records how that was established, and why their
+docs' "Devnet" column is not the answer to the question it looks like it answers.
 
 What follows from lock-and-mint is that **the destination leg is ours**. Guardians
 sign, and then a transaction has to submit that signature to BSC testnet or the

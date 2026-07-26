@@ -96,9 +96,10 @@ backend/app/
   no funded third party, so it is the kind of protocol a testnet can host.
   `scripts/demo_phase6.py` proves the route exists in six read-only calls against both
   chains, and needs no credentials.
-- **The route was established by probing chains, not by reading tables.** Wormhole's
-  supported-networks page marks a "Devnet" column unsupported for Solana — that is
-  their local Tilt network, and read literally it is the wrong answer. What the RPC
+- **The route was established by probing chains, not by reading tables** — because one
+  word in those tables means two things. Wormhole marks Solana ✅ under **Testnet**
+  (which for Solana is the devnet cluster) and ❌ under **Devnet** (their own Tilt
+  local network), so a search for "devnet" finds the wrong answer first. What the RPC
   says: both programs deployed and executable on devnet, an emitter derived locally
   that matches what the explorer reports *and* what BSC testnet's Token Bridge trusts,
   and a wrapped USDC already attested. The Solana instruction is hand-built (no Python

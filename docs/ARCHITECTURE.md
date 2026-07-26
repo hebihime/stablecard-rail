@@ -1853,11 +1853,26 @@ the destination leg is a contract call anyone can make. Nothing about it needs a
 funded third party, so it is the kind of protocol that *can* exist on a testnet — and
 it does.
 
-**The docs say the route does not exist. The chain says it does.** The supported-
-networks table has a **Devnet** column marked ❌ for Solana, and read literally that
-is the answer to this phase's question. It means Wormhole's own local Tilt devnet,
-not Solana devnet; Wormhole's **Testnet** for Solana *is* Solana devnet. Established
-by probing rather than by reading:
+**A word that means two things, and the confusion is worth recording because it
+cost time.** This phase's question is "does a Solana **devnet** route exist", and the
+supported-networks table has a column headed **Devnet** with a ❌ against Solana —
+which reads like a direct answer and is not one. That column is Wormhole's own
+[Tilt local network](https://wormhole.com/docs/tools/dev-env/), "a full-fledged
+Kubernetes deployment of every chain connected to Wormhole, along with a Guardian
+node". The column that answers the question is **Testnet**, which for Solana is
+marked ✅ — and Wormhole's Testnet *is* the Solana devnet cluster.
+
+So the documentation is **not wrong**, and an earlier draft of this section said it
+was. It is consistent, and two other pages of theirs confirm the mapping: the NTT
+deployment guide says "Solana's official testnet cluster is not supported… you must
+use the Solana devnet instead", and their testnet notes say testnet runs **a single
+Guardian** — which is exactly what the wire shows (`signature_count == 1`, guardian
+set 0). What the table does is put the word *devnet* next to a ❌ meaning something
+else, so a reader searching for the term finds the wrong answer first.
+
+The lesson is therefore not "distrust the docs" but the narrower and more useful
+one: **an ambiguous document is settled by asking the network, not by reading
+harder.** Established by probing:
 
 | Probe | Result |
 | --- | --- |
@@ -1870,8 +1885,12 @@ by probing rather than by reading:
 The two derived facts are the ones worth keeping: an emitter address that matches
 what the explorer independently reports proves the *program* in the docs is the
 program the guardians are watching, and a non-zero `wrappedAsset` proves the
-destination side of the route is already open. Both took one RPC call. The habit is
-§8.10's, learned the expensive way from Stripe: **the network is the documentation.**
+destination side of the route is already open. Both took one RPC call.
+
+None of this contradicts the docs; it *disambiguates* them, and it does so in a way
+that keeps working when they change. `scripts/demo_phase6.py` re-runs every probe in
+the table, so the day Wormhole retires the devnet deployment this repository finds
+out from the chain rather than from a table it may have read wrongly again.
 
 **The route is Solana devnet → BSC testnet**, which SPEC.md §5.2 permits explicitly
 ("implement the real adapter against any available Solana-devnet→EVM-testnet route

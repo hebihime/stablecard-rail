@@ -4,11 +4,12 @@ Programs, contracts and chain ids — the things that are true about the protoco
 rather than about our deployment. The endpoint we redeem on is the *chain's*
 business and lives under `EVM_` (`app/chain/evm/config.py`).
 
-Every default in here was established by probing the chains rather than reading
-the tables, because the tables say the route does not exist: Wormhole's
-supported-networks page marks a **Devnet** column ❌ for Solana, which means their
-local Tilt devnet, not Solana devnet. See docs/ARCHITECTURE.md §10.1 for the
-probes and what each one proved.
+Every default in here was established by probing the chains rather than by reading
+the tables — not because the tables are wrong, but because one word in them means
+two things. Wormhole's supported-networks page marks Solana ✅ under **Testnet**
+(which for Solana is the devnet cluster) and ❌ under **Devnet** (which is their own
+Tilt local network). Searching that page for "devnet" therefore finds the wrong
+answer first. See docs/ARCHITECTURE.md §10.1 for the probes and what each proved.
 """
 
 from __future__ import annotations
