@@ -98,7 +98,7 @@ branch = true
 # Without this, `except IntegrityError` handlers reached from an awaited query
 # read as dead code — verified by making one raise and watching tests fail.
 concurrency = ["greenlet", "thread"]
-source = ["app/chain", "app/funding", "app/issuers", "app/ledger", "app/webhooks"]
+source = ["app/chain", "app/funding", "app/issuers", "app/ledger", "app/otp", "app/webhooks"]
 
 [tool.coverage.report]
 show_missing = true
