@@ -24,6 +24,7 @@ from app.chain.rpc import SolanaRpcClient
 from app.chain.solana_watcher import SOLANA_DEVNET, SolanaDepositWatcher
 from app.core.config import Settings
 from app.core.money import Money
+from app.core.time import utcnow
 from app.funding.engine import TopUpEngine, TopUpPolicy
 from app.funding.reconciler import ReconcilerPolicy
 from app.funding.routes import register_route, watched_addresses
@@ -46,7 +47,14 @@ from tests.support import SeedIntent, reload_intent
 
 FIXTURES = Path(__file__).parent / "fixtures" / "solana"
 RPC_URL = "https://api.devnet.solana.com"
-NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+#: Anchored to the real clock, not to a literal date, and that is load-bearing.
+#: `advance()` stamps `state_changed_at` from the *database's* `clock_timestamp()`,
+#: so once a test has driven a transition, its own notion of "now" has to be in the
+#: same neighbourhood as the database's or the row can never look aged again. A
+#: hard-coded `datetime(2026, 7, 26, 12, 0)` passed for about forty minutes on the
+#: day it was written and then failed every run after it — including in CI, which
+#: also lives in UTC. Relative arithmetic below is unaffected either way.
+NOW = utcnow()
 SAFE = "0xSafe000000000000000000000000000000000001"
 DEPOSIT_ACCOUNT = "GXGc5RJU7W4j8FrH38vfGbryht5av3zeiZCmhDN7yRPU"
 DEPOSIT_SIGNATURE = (

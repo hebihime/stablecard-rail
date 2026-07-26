@@ -43,6 +43,7 @@ from app.chain.evm.signer import EvmTransaction, EvmTransactionSigner
 
 __all__ = [
     "GAS_LIMIT_HEADROOM",
+    "AlreadyDelivered",
     "OutOfGasMoney",
     "Redeemer",
     "RedemptionRefused",
@@ -65,6 +66,33 @@ OUT_OF_MONEY_PHRASES = ("insufficient funds", "insufficient balance")
 #: And what it says when the transaction is already in its pool. Both mean the
 #: send succeeded, once from this process and once from a previous attempt.
 ALREADY_SUBMITTED_PHRASES = ("already known", "nonce too low", "already exists")
+
+
+#: What the deployed Token Bridge reverts with when a VAA has already been
+#: redeemed. **Observed, not guessed**: BSC testnet runs a version that uses
+#: `require(..., "transfer already completed")`, where newer Wormhole releases use a
+#: custom error (`TransferAlreadyCompleted()`) that carries no text at all. A
+#: deployment using the custom error would fall through to `RedemptionRefused`,
+#: which is why `is_delivered` remains the authoritative check rather than this.
+ALREADY_COMPLETED_PHRASES = ("transfer already completed", "already completed")
+
+
+class AlreadyDelivered(BridgeError):
+    """The transfer was redeemed by somebody else between the check and the send.
+
+    Good news wearing a revert's clothes, and worth its own class because the
+    alternative is the worst misclassification available: a plain
+    `RedemptionRefused` here would mark an intent `FAILED_BRIDGE` on money that
+    *has arrived*. Two workers, or a driver racing a reconciler, is all it takes —
+    and the repository already warns that two processes can run at once.
+
+    Found by deliberately attempting a duplicate redemption against BSC testnet
+    once a real transfer had been delivered (docs/ARCHITECTURE.md §10.7).
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"the transfer was already delivered: {reason}", retryable=False)
+        self.reason = reason
 
 
 class OutOfGasMoney(BridgeError):
@@ -170,9 +198,12 @@ class Redeemer:
         except EvmRpcError as exc:
             if exc.reverted:
                 # Free pre-flight: the chain says why, and says it without
-                # spending anything. This is where "already completed" and
-                # "invalid emitter" surface.
-                raise RedemptionRefused(exc.revert_reason or str(exc)) from exc
+                # spending anything. Two of the answers here mean opposite things,
+                # so they are separated before either is called a failure.
+                reason = exc.revert_reason or str(exc)
+                if any(phrase in reason.lower() for phrase in ALREADY_COMPLETED_PHRASES):
+                    raise AlreadyDelivered(reason) from exc
+                raise RedemptionRefused(reason) from exc
             raise
 
         gas_price = await self._rpc.gas_price()

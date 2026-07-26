@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.chain.bridge.simulated import BridgeFailureMode, SimulatedBridge
 from app.core.config import Settings
 from app.core.money import Money
+from app.core.time import utcnow
 from app.funding.engine import TopUpEngine, TopUpPolicy
 from app.funding.reconciler import (
     RECONCILABLE_STATES,
@@ -42,7 +43,14 @@ from app.issuers.base import (
 )
 from tests.support import SeedIntent, reload_intent
 
-NOW = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+#: Anchored to the real clock, not to a literal date, and that is load-bearing.
+#: `advance()` stamps `state_changed_at` from the *database's* `clock_timestamp()`,
+#: so once a test has driven a transition, its own notion of "now" has to be in the
+#: same neighbourhood as the database's or the row can never look aged again. A
+#: hard-coded `datetime(2026, 7, 26, 12, 0)` passed for about forty minutes on the
+#: day it was written and then failed every run after it — including in CI, which
+#: also lives in UTC. Relative arithmetic below is unaffected either way.
+NOW = utcnow()
 SAFE = "0xSafe000000000000000000000000000000000001"
 
 

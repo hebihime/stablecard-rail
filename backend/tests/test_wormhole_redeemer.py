@@ -24,6 +24,7 @@ from eth_account import Account
 
 from app.chain.bridge.wormhole.redeemer import (
     GAS_LIMIT_HEADROOM,
+    AlreadyDelivered,
     OutOfGasMoney,
     Redeemer,
     RedemptionRefused,
@@ -439,3 +440,43 @@ async def test_a_generic_minus_32000_is_still_raised_as_itself() -> None:
 
     assert not isinstance(caught.value, OutOfGasMoney)
     assert "intrinsic gas too low" in str(caught.value)
+
+
+@respx.mock
+async def test_an_already_completed_revert_is_delivery_not_refusal() -> None:
+    # The revert text here is the one BSC testnet actually produced when a
+    # duplicate redemption was attempted against a delivered transfer. Calling it
+    # a refusal would be the worst misclassification available: FAILED_BRIDGE on
+    # money that has arrived.
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": 3,
+                    "message": "execution reverted: transfer already completed: 0x08c379a0",
+                },
+            },
+        )
+    )
+
+    with pytest.raises(AlreadyDelivered) as caught:
+        await redeemer().redeem(b"\x01")
+
+    assert not isinstance(caught.value, RedemptionRefused)
+    assert "already delivered" in str(caught.value)
+
+
+@respx.mock
+async def test_any_other_revert_is_still_a_refusal() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json=fixture("error_execution_reverted"))
+    )
+
+    with pytest.raises(RedemptionRefused) as caught:
+        await redeemer().redeem(b"\x01")
+
+    assert not isinstance(caught.value, AlreadyDelivered)
+    assert caught.value.reason == "VM version incompatible"

@@ -57,7 +57,7 @@ from app.chain.bridge.wormhole.accounts import (
 from app.chain.bridge.wormhole.client import WormholescanClient
 from app.chain.bridge.wormhole.config import WormholeSettings
 from app.chain.bridge.wormhole.instructions import build_transfer_message, populate_transaction
-from app.chain.bridge.wormhole.redeemer import Redeemer, RedemptionRefused
+from app.chain.bridge.wormhole.redeemer import AlreadyDelivered, Redeemer, RedemptionRefused
 from app.chain.bridge.wormhole.vaa import (
     MAX_WORMHOLE_DECIMALS,
     SignedVaa,
@@ -252,6 +252,14 @@ class WormholeBridge(BridgeProvider):
 
         try:
             tx_hash = await self._redeemer.redeem(vaa.raw)
+        except AlreadyDelivered:
+            # Somebody else redeemed it between the check above and this call —
+            # two workers, or a driver racing a reconciler. The money arrived, so
+            # this is a completion, not a failure.
+            logger.info("transfer %s was delivered by another attempt", bridge_ref)
+            return self._from_vaa(
+                bridge_ref, vaa, amount, status=BridgeStatus.COMPLETED, amount_out=amount
+            )
         except RedemptionRefused as refused:
             # The chain will repeat this. The money is still recoverable with
             # this VAA, so the reason is carried into the ledger rather than

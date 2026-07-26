@@ -43,7 +43,7 @@ from app.chain.bridge.wormhole.accounts import (
 from app.chain.bridge.wormhole.adapter import WormholeBridge
 from app.chain.bridge.wormhole.client import WormholescanClient
 from app.chain.bridge.wormhole.config import WormholeSettings
-from app.chain.bridge.wormhole.redeemer import Redeemer, RedemptionRefused
+from app.chain.bridge.wormhole.redeemer import AlreadyDelivered, Redeemer, RedemptionRefused
 from app.chain.bridge.wormhole.vaa import parse_signed_vaa
 from app.chain.config import USDC_DEVNET_MINT
 from app.chain.rpc import SolanaRpcClient, SolanaRpcError
@@ -469,3 +469,28 @@ class SlowSolana(StubSolana):
         if self.sent and self.account_calls >= self._appears_on_call:
             return recorded_message_account()
         return None
+
+
+async def test_a_transfer_delivered_by_someone_else_reports_completed() -> None:
+    # The race the live chain pointed at: is_delivered says no, and by the time the
+    # redemption is sent another worker has done it. The money arrived, so this is
+    # a completion — reporting FAILED here would fail an intent on delivered funds.
+    redeemer = RacingRedeemer()
+
+    transfer = await bridge(
+        guardians=StubGuardians(recorded_vaa_bytes()), redeemer=redeemer
+    ).status("1/abcd/56910")
+
+    assert transfer.status is BridgeStatus.COMPLETED
+    assert transfer.amount_out == transfer.amount_in
+    assert transfer.failure_reason is None
+
+
+class RacingRedeemer(StubRedeemer):
+    """Reports undelivered, then loses the race to redeem."""
+
+    async def is_delivered(self, digest: bytes) -> bool:
+        return False
+
+    async def redeem(self, vaa: bytes) -> str:
+        raise AlreadyDelivered("transfer already completed")

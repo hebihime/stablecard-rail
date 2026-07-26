@@ -2117,38 +2117,50 @@ a refusal is not the same as lost money, and the VAA remains the key to it.
 
 Recorded plainly, in the spirit of §8.9.
 
-**A real transfer has been sent, and the destination leg has not run.** The source
-half is verified end to end: a `simulateTransaction` returned `err: null` and logged
-`Sequence:` before any SOL was spent — so the hand-built transaction is *accepted by
-the programs*, not merely byte-identical to one that was — and then a real transfer
-of 0.100000 USDC went out and **the guardians signed it** (sequence 56912, digest
-`69d34b7e…`). Both of those were listed here as unverifiable an hour earlier.
+**The route has now carried real money, twice, end to end.** This section was a
+list of gaps for most of the phase; almost all of them are closed, and what closed
+them is worth keeping because each one was a different kind of evidence.
 
-What remains is the redemption: `completeTransfer` against a VAA of ours has never
-run, because the address that pays destination gas holds 0.000001 tBNB and one
-redemption costs about 0.0000187 (155,633 gas plus the 1.2 headroom, at 0.1 gwei).
-The transfer is intact and waiting — 0.1 USDC in the Token Bridge's custody account,
-a signed VAA that does not expire, and `demo_phase6.py --resume 1/…/56912` to finish
-it. That path exists *because* §10.2's point 2 says it must.
+| Claim | How it is now known |
+| --- | --- |
+| the hand-built transaction is *accepted*, not just byte-identical to one that was | `simulateTransaction` returned `err: null` and logged `Sequence:` — for free, before any SOL was spent |
+| the guardians sign our messages | sequences 56912 and 56913, one signature each, within ~30s of the send |
+| `completeTransfer` succeeds against a VAA of ours | wrapped USDC balance on BSC testnet went 0 → 0.1 → 0.35, and the Token Bridge answers `isTransferCompleted` **true** for both digests |
+| `amount_out == amount_in` (§10.2, point 4) | 100000 in, 100000 out; 250000 in, 250000 out. No protocol fee and no truncation, as predicted |
+| a duplicate `submit` locks nothing (§10.4) | the same `order_ref` re-submitted against the live chain returned the same `bridge_ref` and sent no transaction |
+| redeeming twice is a no-op (§10.5) | `--resume` on a delivered transfer answers `completed` without signing anything |
+| the "already completed" revert | provoked deliberately: `'transfer already completed'`, a **string**, so BSC testnet runs a pre-custom-error version |
 
-**The "already completed" revert is a prediction.** `RedemptionRefused` is exercised
-against a real revert — *VM version incompatible*, from the real contract, recorded
-— but the specific revert a duplicate redemption produces has not been seen. Newer
-Wormhole releases use a custom error (`TransferAlreadyCompleted()`) where older ones
-used a string, and the deployed BSC testnet version is unknown. This is why the
-adapter branches on `isTransferCompleted` rather than on a revert reason: the check
-is authoritative and the string is not.
+The second transfer ran the whole way in **40 seconds** — submit, finality, guardian
+signature, redemption, delivery — and cost 0.00001521 tBNB in gas, against the
+0.0000187 budgeted with headroom.
+
+**The "already completed" revert is no longer a prediction, and finding out fixed a
+race.** Attempting a duplicate redemption against a delivered transfer returns
+`'transfer already completed'` as a plain string, so BSC testnet runs a version
+predating Wormhole's custom errors. That matters more than it sounds: the adapter was
+mapping *every* revert to `RedemptionRefused`, which is non-retryable — so a
+redemption that lost a race to another worker would have marked the intent
+`FAILED_BRIDGE` **on money that had arrived**, the worst misclassification available
+here. Two workers, or a driver racing the reconciler, is all it takes, and this
+repository already warns that two processes can run at once. `AlreadyDelivered` now
+separates the two, and the adapter reports `COMPLETED`. `isTransferCompleted` remains
+the authoritative check, because a deployment using the custom error would carry no
+text for this to match on.
 
 **Nothing has been run against a second guardian set.** Testnet signs with one
 guardian; mainnet has nineteen. The VAA parser handles the count generically and a
 test pins the one-signature case, but a mainnet-shaped VAA has never been through it.
 
-**Finality timing is only half measured.** §10.2 point 5 says
+**Finality timing is measured now.** §10.2 point 5 says
 `RECONCILER_STUCK_AFTER_SECONDS` has to exceed Solana finality plus guardian quorum
-plus BSC inclusion. The first two are now observed rather than guessed: the message
-account was readable at `finalized` and the VAA was signed **within about thirty
-seconds** of the send. BSC inclusion is still unmeasured, so the 120s default is
-better founded than it was and is not yet a measurement.
+plus BSC inclusion, and the 120s default was a guess. Observed: the whole span is
+about **40 seconds**, of which roughly thirteen is Solana finality (the wait for the
+message account to be readable), the guardian signature is present by the first poll
+after that, and BSC inclusion lands inside one 15-second poll interval. So 120s is
+roughly 3× the observed span — adequate, and now founded on something. What is still
+unknown is the tail: one clean run is not a distribution, and a congested BSC or a
+slow guardian would widen it.
 
 ### 10.7 What the first live transfer found
 
@@ -2183,6 +2195,21 @@ the transaction is already in the pool and there is nothing new to send. The has
 a property of the signed bytes, so it can be returned without the node's answer at
 all — which is what turns this from an error into the success it is.
 
+**4. Every revert was a permanent failure, including the one that means success.**
+Provoking a duplicate redemption once a transfer had actually been delivered showed
+the chain saying `'transfer already completed'` — which the adapter was mapping to
+`RedemptionRefused` and therefore to `FAILED_BRIDGE`, on money that had arrived. See
+§10.6; `AlreadyDelivered` separates them now. This one is a genuine race rather than
+a misconfiguration, so it could have happened in ordinary operation with two workers
+running.
+
 Two smaller ones, both in the demo rather than the adapter: it tracebacked on a
 `BridgeError` instead of reporting it, and its output was invisible when piped,
 because Python buffers stdout and this script polls for minutes.
+
+What the four have in common is worth stating: **not one of them was a logic error in
+something a test could see.** They were all assumptions about how a counterparty
+behaves — when a node's view catches up, what it says when you cannot pay, what it
+says when it already has your transaction, and what it says when the work is already
+done. §8.10 learned the same thing from a live Stripe account. It appears to be the
+rule rather than the exception.
