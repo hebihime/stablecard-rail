@@ -49,9 +49,15 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-#: External references a caller may set while advancing. Everything else about an
-#: intent — state, amount, identity — is either immutable or machine-owned.
-MUTABLE_INTENT_FIELDS = frozenset({"deposit_tx_ref", "bridge_ref", "issuer_funding_ref"})
+#: What a caller may set while advancing: the external references a hop earns,
+#: and the amount the bridge actually delivered. Everything else about an intent
+#: — state, the deposited amount, identity — is immutable or machine-owned.
+#:
+#: `bridged_amount_minor` is on this list and `amount_minor` is not, deliberately.
+#: The deposit is history; what survived the bridge is a new fact about it.
+MUTABLE_INTENT_FIELDS = frozenset(
+    {"deposit_tx_ref", "bridge_ref", "issuer_funding_ref", "bridged_amount_minor"}
+)
 
 _IDEMPOTENCY_CONSTRAINT = "uq_ledger_events_idempotency_key"
 

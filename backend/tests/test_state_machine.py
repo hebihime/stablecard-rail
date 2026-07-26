@@ -198,6 +198,44 @@ async def test_advance_can_update_allowlisted_reference_fields(
     assert persisted.bridge_ref == "0xbridge-order-1"
 
 
+async def test_the_bridged_amount_is_set_by_the_transition_that_learns_it(
+    session: AsyncSession, seed_intent: SeedIntent
+) -> None:
+    # BRIDGING -> BRIDGED is the moment the delivered amount becomes known, so
+    # it is set through `advance()` like every other fact about an intent —
+    # in the same transaction as the state change and the ledger entry.
+    intent = await seed_intent(state=FundingState.BRIDGING, amount_minor=2500)
+
+    await advance(
+        session,
+        intent.id,
+        FundingState.BRIDGED,
+        updates={"bridged_amount_minor": 2350},
+    )
+
+    persisted = await reload_intent(session, intent.id)
+    assert persisted.amount_minor == 2500  # the deposit, still the deposit
+    assert persisted.bridged_amount_minor == 2350
+    assert persisted.fundable_money.amount_minor == 2350
+
+
+@pytest.mark.parametrize("state", [FundingState.DEPOSIT_CONFIRMED, FundingState.BRIDGED])
+async def test_the_hand_off_states_can_retry_in_place(
+    session: AsyncSession, seed_intent: SeedIntent, state: FundingState
+) -> None:
+    # Phase 5's addition to the table. A submit or a `fund_card` that fails with
+    # a 503 has to be countable, or the retry cap in SPEC.md §5.3 has nothing to
+    # count and the intent retries forever (docs/ARCHITECTURE.md §9.9).
+    intent = await seed_intent(state=state)
+
+    await advance(session, intent.id, state, reason="provider unavailable")
+
+    persisted = await reload_intent(session, intent.id)
+    assert persisted.state is state
+    assert persisted.retry_count == 1
+    assert persisted.last_error == "provider unavailable"
+
+
 async def test_advance_refuses_to_update_fields_outside_the_allowlist(
     session: AsyncSession, seed_intent: SeedIntent
 ) -> None:

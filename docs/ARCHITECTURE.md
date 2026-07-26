@@ -1564,3 +1564,54 @@ same pair is a no-op. The fund screen will register on every open, so the no-op 
 to be free; and a transfer already in flight to that address was sent for the card
 it pointed at when the sender read it, so silently re-pointing would credit the
 wrong card on arrival.
+
+### 9.9 Two states learned to retry, and one deliberately did not
+
+Phase 1 gave the self-transition — the retry — to `PENDING`, `BRIDGING` and
+`FUNDING`, on the rule "only the states that wait on an external system are
+retryable". Building the engine showed that rule was one word too narrow.
+
+`DEPOSIT_CONFIRMED` does not *wait* on anything: it is about to submit a bridge
+order. `BRIDGED` is about to call `fund_card`. Both of those calls can fail
+transiently — a 503, a timeout, a rate limit — and with no self-loop there was
+nowhere to record the attempt. An intent would sit in `DEPOSIT_CONFIRMED` while the
+reconciler re-tried it forever, because SPEC.md §5.3's cap counts `retry_count`, and
+`retry_count` can only move through `advance()`.
+
+So the rule is now: **a state retries in place if, and only if, leaving it requires
+an outbound call.** That is `PENDING` (ask the chain), `DEPOSIT_CONFIRMED` (submit),
+`BRIDGING` (poll), `BRIDGED` (fund), `FUNDING` (fund or poll). `FUNDED` is the one
+non-terminal state left without a loop, and that is not an oversight: it waits for a
+settlement webhook to *arrive*, and nothing we do makes that happen sooner. A retry
+there would be a busy-wait with a counter on it.
+
+The golden matrix in `test_transition_table.py` exists to make exactly this change
+deliberate, and it did its job — the edit failed the suite until the expectation was
+updated by hand.
+
+**One existing test changed meaning rather than merely breaking**, which is the more
+interesting half. `test_concurrent_advances_are_serialised_by_row_lock` raced two
+workers on `PENDING -> DEPOSIT_CONFIRMED` and asserted that the loser was rejected.
+With the self-loop, the loser now finds `DEPOSIT_CONFIRMED` and records a legal
+retry — it tests the counter, not the lock. It now races `FUNDED -> SETTLED`, where
+the target is terminal, so "applied twice" stays unambiguously illegal and the test
+goes on testing what it was written to test.
+
+### 9.10 The deposited amount and the bridged amount are different columns
+
+`funding_intents` gained `bridged_amount_minor`, nullable, set by the
+`BRIDGING -> BRIDGED` transition that learns it.
+
+It could have overwritten `amount_minor`. That would have been wrong in a way that
+only shows up during an investigation: the deposit is a fact about the source chain
+and the delivered amount is a fact about the bridge, and a pipeline that keeps one
+number cannot answer "where did the missing 1.50 go?" months later. Two columns make
+the fee the difference between two recorded values, and `INTENT_TRANSITIONED` records
+the update alongside the hop.
+
+`fundable_money` is what the card is funded with: the bridged amount when there is
+one, the deposited amount when there is not. A card funded with `amount_minor` after
+a fee is a card funded with money nobody has.
+
+`bridged_amount_minor` is on `MUTABLE_INTENT_FIELDS` and `amount_minor` is not — the
+deposit is history; what survived the bridge is a new fact about it.

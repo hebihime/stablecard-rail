@@ -58,8 +58,16 @@ class FundingIntent(Base):
     #: Provider's opaque card identifier.
     card_id: Mapped[str] = mapped_column(String(128), nullable=False)
 
+    #: What was deposited. Immutable: it is the record of what arrived on the
+    #: source chain, and nothing downstream may edit history.
     amount_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False)
+
+    #: What the bridge delivered, net of its fee (SPEC.md §11). `None` until the
+    #: transfer completes. A separate column rather than an overwrite of
+    #: `amount_minor`, so the fee is the difference between two recorded numbers
+    #: instead of a change nobody can see afterwards.
+    bridged_amount_minor: Mapped[int | None] = mapped_column(BigInteger)
 
     #: Source chain transaction reference. Unique, so a replayed deposit
     #: notification can only ever produce one intent.
@@ -96,7 +104,19 @@ class FundingIntent(Base):
 
     @property
     def money(self) -> Money:
+        """What was deposited."""
         return Money(self.amount_minor, self.currency)
+
+    @property
+    def fundable_money(self) -> Money:
+        """What the card can actually be funded with.
+
+        The bridged amount once there is one, because a card funded with the
+        deposited amount is a card funded with the bridge's fee as well.
+        """
+        if self.bridged_amount_minor is None:
+            return self.money
+        return Money(self.bridged_amount_minor, self.currency)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<FundingIntent {self.id} {self.state} {self.money}>"

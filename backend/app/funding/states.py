@@ -6,7 +6,17 @@ permitted to act on it. Two conventions are worth stating explicitly:
 **Retries are self-transitions.** SPEC.md §5.3 has the reconciler retry with
 backoff *up to a cap* and only then mark `FAILED_*`. So a retry does not leave the
 state it is retrying — `BRIDGING -> BRIDGING` bumps `retry_count` and ledgers the
-attempt. Only the three states that wait on an external system are retryable.
+attempt.
+
+**A state retries in place if, and only if, leaving it requires an outbound
+call.** Phase 1 read that as "waits on an external system" and gave the loop to
+three states. Phase 5 built the engine and found the rule was one word too narrow:
+`DEPOSIT_CONFIRMED` and `BRIDGED` do not *wait* on anything — they are about to
+call one, and that call can fail transiently exactly like a poll can. Without a
+loop there, a bridge that refuses one submission with a 503 leaves an intent with
+no way to count the attempt, and therefore no cap to reach (docs/ARCHITECTURE.md
+§9.9). `FUNDED` is the one non-terminal state that stays loop-free: it waits for a
+settlement webhook to arrive, and nothing we do makes that happen sooner.
 
 **`FAILED_*` states are terminal.** A failed intent is a closed record; recovery
 means opening a new intent, which keeps the ledger honest about what happened
@@ -57,13 +67,15 @@ _S = FundingState
 TRANSITIONS: Mapping[FundingState, frozenset[FundingState]] = {
     # Awaiting a finalized USDC deposit. Self-loop = watcher re-checked the chain.
     _S.PENDING: frozenset({_S.PENDING, _S.DEPOSIT_CONFIRMED, _S.FAILED_DEPOSIT}),
-    # Deposit finalized; handing off to the bridge. FAILED_BRIDGE covers a bridge
-    # order that could not even be submitted.
-    _S.DEPOSIT_CONFIRMED: frozenset({_S.BRIDGING, _S.FAILED_BRIDGE}),
+    # Deposit finalized; handing off to the bridge. Self-loop = the submission
+    # failed in a way worth repeating. FAILED_BRIDGE covers a bridge order that
+    # could not be submitted at all.
+    _S.DEPOSIT_CONFIRMED: frozenset({_S.DEPOSIT_CONFIRMED, _S.BRIDGING, _S.FAILED_BRIDGE}),
     # In flight across the bridge. Self-loop = destination not yet confirmed.
     _S.BRIDGING: frozenset({_S.BRIDGING, _S.BRIDGED, _S.FAILED_BRIDGE}),
-    # Funds landed on the destination chain; calling the issuer next.
-    _S.BRIDGED: frozenset({_S.FUNDING, _S.FAILED_FUNDING}),
+    # Funds landed on the destination chain; calling the issuer next. Self-loop =
+    # that call could not be made, not that it was refused.
+    _S.BRIDGED: frozenset({_S.BRIDGED, _S.FUNDING, _S.FAILED_FUNDING}),
     # Issuer `fund_card` in flight. Self-loop = still awaiting confirmation.
     _S.FUNDING: frozenset({_S.FUNDING, _S.FUNDED, _S.FAILED_FUNDING}),
     # Card credited; awaiting the provider's settlement event to reconcile.
@@ -84,7 +96,8 @@ TERMINAL_STATES: frozenset[FundingState] = frozenset(
     state for state, targets in TRANSITIONS.items() if not targets
 )
 
-#: States that wait on an external system and may therefore be retried in place.
+#: States whose exit needs an outbound call, and which may therefore be retried
+#: in place. Derived from the table so the two can never disagree.
 RETRYABLE_STATES: frozenset[FundingState] = frozenset(
     state for state, targets in TRANSITIONS.items() if state in targets
 )

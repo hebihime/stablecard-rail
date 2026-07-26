@@ -25,9 +25,9 @@ S = FundingState
 # A state mapping to an empty set is terminal.
 EXPECTED: dict[FundingState, set[FundingState]] = {
     S.PENDING: {S.PENDING, S.DEPOSIT_CONFIRMED, S.FAILED_DEPOSIT},
-    S.DEPOSIT_CONFIRMED: {S.BRIDGING, S.FAILED_BRIDGE},
+    S.DEPOSIT_CONFIRMED: {S.DEPOSIT_CONFIRMED, S.BRIDGING, S.FAILED_BRIDGE},
     S.BRIDGING: {S.BRIDGING, S.BRIDGED, S.FAILED_BRIDGE},
-    S.BRIDGED: {S.FUNDING, S.FAILED_FUNDING},
+    S.BRIDGED: {S.BRIDGED, S.FUNDING, S.FAILED_FUNDING},
     S.FUNDING: {S.FUNDING, S.FUNDED, S.FAILED_FUNDING},
     S.FUNDED: {S.SETTLED, S.FAILED_SETTLEMENT},
     S.SETTLED: set(),
@@ -98,7 +98,26 @@ def test_retryable_states_are_exactly_the_self_looping_ones() -> None:
     assert RETRYABLE_STATES == frozenset(
         state for state, targets in TRANSITIONS.items() if state in targets
     )
-    assert RETRYABLE_STATES == {S.PENDING, S.BRIDGING, S.FUNDING}
+    # Every state whose exit requires an outbound call, and no others. Phase 5
+    # added the two hand-off states: a submit or a fund_card can fail
+    # transiently, and an attempt that cannot be counted has no cap to reach
+    # (docs/ARCHITECTURE.md §9.9).
+    assert RETRYABLE_STATES == {
+        S.PENDING,
+        S.DEPOSIT_CONFIRMED,
+        S.BRIDGING,
+        S.BRIDGED,
+        S.FUNDING,
+    }
+
+
+def test_the_only_non_terminal_state_that_cannot_retry_is_funded() -> None:
+    # FUNDED waits for a settlement webhook to arrive. Nothing we do makes that
+    # happen sooner, so a retry there would be a busy-wait with a counter on it.
+    waiting = {
+        state for state in FundingState if not is_terminal(state) and state not in RETRYABLE_STATES
+    }
+    assert waiting == {S.FUNDED}
 
 
 def test_no_state_escapes_a_terminal_state() -> None:

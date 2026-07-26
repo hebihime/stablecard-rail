@@ -89,3 +89,33 @@ async def test_identifiers_are_stored_opaquely(session: AsyncSession) -> None:
     assert intent.provider_id == "stripe_issuing"
     assert intent.deposit_tx_ref == "4mKp9"
     assert intent.currency == "EUR"
+
+
+async def test_a_new_intent_has_no_bridged_amount_yet(session: AsyncSession) -> None:
+    intent = await create_intent(
+        session,
+        provider_id="gnosis_pay_mock",
+        card_id="card_abc",
+        amount=Money(2500, "USD"),
+    )
+
+    # `None` means the bridge has not reported, which is not the same as "the
+    # bridge delivered nothing" and not the same as "it delivered all of it".
+    assert intent.bridged_amount_minor is None
+    assert intent.fundable_money == Money(2500, "USD")
+
+
+async def test_the_card_is_funded_with_what_survived_the_bridge(session: AsyncSession) -> None:
+    # SPEC.md §11: bridged amounts arrive net of fees. Funding a card with the
+    # deposited amount would be funding it with the bridge's fee as well.
+    intent = await create_intent(
+        session,
+        provider_id="gnosis_pay_mock",
+        card_id="card_abc",
+        amount=Money(2500, "USD"),
+    )
+    intent.bridged_amount_minor = 2350
+    await session.commit()
+
+    assert intent.money == Money(2500, "USD")  # what was deposited, unchanged
+    assert intent.fundable_money == Money(2350, "USD")  # what there is to fund with

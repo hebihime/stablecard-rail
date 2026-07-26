@@ -75,21 +75,26 @@ async def test_concurrent_advances_are_serialised_by_row_lock(
     session: AsyncSession,
     seed_intent: SeedIntent,
 ) -> None:
-    intent = await seed_intent(state=FundingState.PENDING)
+    # FUNDED -> SETTLED, because the target is terminal: whichever worker loses
+    # the lock finds a state with nowhere left to go, so "applied twice" is
+    # unambiguously illegal rather than indistinguishable from a retry. (Phase 5
+    # gave DEPOSIT_CONFIRMED a self-loop, which is what this used to race on —
+    # the loser there is now a legal retry, which tests the counter, not the lock.)
+    intent = await seed_intent(state=FundingState.FUNDED)
 
     async def hop() -> str:
         async with sessionmaker() as worker:
             try:
-                result = await advance(worker, intent.id, FundingState.DEPOSIT_CONFIRMED)
+                result = await advance(worker, intent.id, FundingState.SETTLED)
             except IllegalTransitionError:
                 return "rejected"
             return str(result.state)
 
     outcomes = await asyncio.gather(hop(), hop())
 
-    assert sorted(outcomes) == ["DEPOSIT_CONFIRMED", "rejected"]
+    assert sorted(outcomes) == ["SETTLED", "rejected"]
     persisted = await reload_intent(session, intent.id)
-    assert persisted.state is FundingState.DEPOSIT_CONFIRMED
+    assert persisted.state is FundingState.SETTLED
     events = await ledger_for_intent(session, intent.id)
     # One applied transition + one ledgered rejection.
     assert len(events) == 2
