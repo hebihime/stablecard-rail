@@ -33,6 +33,7 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
 from app.chain.bridge.base import BridgeError
+from app.chain.tokens import TOKEN_PROGRAM_ID
 
 __all__ = [
     "MESSAGE_SEED_CONTEXT",
@@ -97,8 +98,6 @@ def transfer_accounts(
     core_bridge_program: Pubkey,
 ) -> TransferAccounts:
     """Derive the whole account list from the six things a caller actually knows."""
-    from app.chain.tokens import TOKEN_PROGRAM_ID
-
     emitter = _pda([b"emitter"], token_bridge_program)
     return TransferAccounts(
         payer=payer,
