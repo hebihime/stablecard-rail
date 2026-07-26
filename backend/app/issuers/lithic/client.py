@@ -129,9 +129,14 @@ class LithicClient:
         *,
         json_body: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
+        allow_empty_body: bool = False,
     ) -> dict[str, Any]:
         return await self.request(
-            "POST", path, json_body=json_body, idempotency_key=idempotency_key
+            "POST",
+            path,
+            json_body=json_body,
+            idempotency_key=idempotency_key,
+            allow_empty_body=allow_empty_body,
         )
 
     async def patch(
@@ -170,6 +175,7 @@ class LithicClient:
         params: Mapping[str, Any] | None = None,
         json_body: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
+        allow_empty_body: bool = False,
     ) -> dict[str, Any]:
         headers = {
             "Authorization": checked_api_key(self._api_key),
@@ -200,7 +206,7 @@ class LithicClient:
                 await self._sleep(self._backoff[attempt])
                 attempt += 1
                 continue
-            return self._read(method, path, response)
+            return self._read(method, path, response, allow_empty_body=allow_empty_body)
 
     async def _send(
         self,
@@ -215,13 +221,30 @@ class LithicClient:
                 method, path, params=params, json=json_body, headers=dict(headers)
             )
 
-    def _read(self, method: str, path: str, response: httpx.Response) -> dict[str, Any]:
+    def _read(
+        self,
+        method: str,
+        path: str,
+        response: httpx.Response,
+        *,
+        allow_empty_body: bool = False,
+    ) -> dict[str, Any]:
         try:
             payload = response.json()
         except ValueError:
             payload = None
 
         if response.is_success:
+            if payload is None and allow_empty_body:
+                # Opt-in per call rather than a blanket relaxation. Their 3DS
+                # challenge-response endpoint is the first here that answers 200
+                # with nothing at all — documented as "Challenge Response was
+                # received and forwarded to the ACS", with no response content —
+                # and until this the client treated a bodyless success as a
+                # malformed one. Accepting an empty body everywhere would be the
+                # wrong fix: a list endpoint that suddenly answered 200 with
+                # nothing would then read as "no records" (§11.7).
+                return {}
             if not isinstance(payload, dict):
                 raise LithicApiError(
                     f"{method} {path} answered {response.status_code} but the body is not JSON",

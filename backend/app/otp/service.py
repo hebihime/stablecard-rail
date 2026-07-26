@@ -38,7 +38,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import get_settings
 from app.core.money import Money
 from app.core.time import utcnow
-from app.issuers.base import CardEvent, CardEventType
+from app.issuers.base import (
+    CardEvent,
+    CardEventType,
+    ChallengeDecision,
+    ChallengeResponseUnsupported,
+)
+from app.issuers.registry import get_adapter
 from app.ledger import event_types
 from app.ledger.writer import find_by_idempotency_key, record
 from app.otp.push import publish_challenge
@@ -47,7 +53,9 @@ from app.webhooks.dispatch import Handler, subscribe
 
 __all__ = [
     "HANDLER_NAME",
+    "ChallengeAnswer",
     "OtpDelivery",
+    "answer_challenge",
     "deliver_challenge",
     "delivered_idempotency_key",
     "make_challenge_handler",
@@ -253,3 +261,105 @@ def subscribe_challenges(sessionmaker: async_sessionmaker[AsyncSession], redis: 
         make_challenge_handler(sessionmaker, redis),
         replace=True,
     )
+
+
+# ------------------------------------------------------- approve / decline ----
+
+
+@dataclass(frozen=True, slots=True)
+class ChallengeAnswer:
+    """What became of one approve/decline."""
+
+    challenge: OtpChallenge
+    decision: ChallengeDecision
+    #: `False` when the provider has no endpoint to accept it. The decision is
+    #: recorded either way — SPEC.md §6.5's fallback.
+    delivered: bool
+    provider_ref: str | None = None
+    #: Why it was not delivered, when it was not.
+    detail: str | None = None
+
+
+async def answer_challenge(
+    session: AsyncSession,
+    redis: Redis,
+    challenge: OtpChallenge,
+    decision: ChallengeDecision,
+    *,
+    now: datetime,
+) -> ChallengeAnswer:
+    """Post the decision back through the adapter, or record what would have been.
+
+    SPEC.md §6.5, exactly as written: "Approve/decline response posted back through
+    the adapter where the sandbox supports it; otherwise ledgered as `responded` with
+    the payload that would be sent."
+
+    **The order is deliver, ledger, forget.** Consuming the challenge before the row
+    was written would lose the record of a decision that had already reached the
+    provider — and that record is the whole point of a ledger here. A crash between
+    the row and the forget leaves the challenge answerable again, which the provider
+    then refuses as already-answered: visible, diagnosable, and much the better half
+    of the trade.
+
+    A provider failure that is neither of those propagates and nothing is consumed,
+    so the cardholder can try again.
+    """
+    adapter = get_adapter(challenge.provider_id)
+    try:
+        response = await adapter.respond_to_challenge(challenge.challenge_id, decision)
+    except ChallengeResponseUnsupported as exc:
+        answer = ChallengeAnswer(
+            challenge=challenge, decision=decision, delivered=False, detail=str(exc)
+        )
+    else:
+        answer = ChallengeAnswer(
+            challenge=challenge,
+            decision=decision,
+            delivered=True,
+            provider_ref=response.provider_ref,
+        )
+
+    await _ledger_responded(session, answer, now=now)
+    # Single-use (SPEC.md §6.5): answered means no longer pending, and the code is
+    # gone from Redis rather than left to expire on its own.
+    await OtpStore(redis).forget(challenge.provider_id, challenge.challenge_id)
+    logger.info(
+        "3DS challenge %s answered %s and %s",
+        challenge.challenge_id,
+        decision.value,
+        "delivered to the provider" if answer.delivered else "recorded only",
+    )
+    return answer
+
+
+async def _ledger_responded(
+    session: AsyncSession, answer: ChallengeAnswer, *, now: datetime
+) -> None:
+    challenge = answer.challenge
+    await record(
+        session,
+        event_type=event_types.OTP_RESPONDED,
+        occurred_at=now,
+        provider_id=challenge.provider_id,
+        cardholder_id=challenge.cardholder_id,
+        card_id=challenge.card_id,
+        amount=_amount_of(challenge),
+        idempotency_key=f"otp:{challenge.provider_id}:{challenge.challenge_id}:responded",
+        payload={
+            "challenge_id": challenge.challenge_id,
+            "provider_event_id": challenge.event_id,
+            "decision": answer.decision.value,
+            "delivered": answer.delivered,
+            "provider_ref": answer.provider_ref,
+            "detail": answer.detail,
+            # What §6.5 calls "the payload that would be sent". Our normalized
+            # decision rather than a provider-shaped body, and deliberately: a
+            # provider with no such endpoint has no body shape to record, so
+            # inventing one would be recording a request that could not exist.
+            "would_send": {
+                "challenge_id": challenge.challenge_id,
+                "decision": answer.decision.value,
+            },
+        },
+    )
+    await session.commit()

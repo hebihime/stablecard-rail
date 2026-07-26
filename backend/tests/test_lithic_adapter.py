@@ -27,6 +27,9 @@ from app.core.money import Money
 from app.issuers.base import (
     CardNotFoundError,
     CardState,
+    ChallengeAlreadyAnsweredError,
+    ChallengeDecision,
+    ChallengeNotFoundError,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
@@ -35,7 +38,7 @@ from app.issuers.base import (
 )
 from app.issuers.lithic import LithicAdapter
 from app.issuers.lithic import adapter as adapter_module
-from app.issuers.lithic.client import LithicClient
+from app.issuers.lithic.client import LithicApiError, LithicClient
 from app.issuers.lithic.config import LithicSettings
 
 BASE_URL = "https://sandbox.lithic.test/v1"
@@ -557,3 +560,112 @@ async def test_money_from_lithic_is_integer_minor_units(adapter: LithicAdapter) 
     assert card.spend_limit_minor is not None
     assert isinstance(card.spend_limit_minor, int)
     assert Money(card.spend_limit_minor, card.currency) == Money(50_000, "USD")
+
+
+# ----------------------------------------------------------- 3DS / OTP ----
+# SPEC.md §6.5's "where the sandbox supports it" case. Lithic really has this
+# endpoint — it is the other end of the three_ds_authentication.challenge webhook,
+# and their customer-orchestrated flow means the card program is the party that
+# answers. The request shape below comes from the OpenAPI document their reference
+# page embeds, not from its prose; see §11.7 for where the two disagree.
+
+CHALLENGE_RESPONSE_PATH = f"{BASE_URL}/three_ds_decisioning/challenge_response"
+CHALLENGE_TOKEN = "9f7b1d2e-4c3a-4f58-9c11-2a6d5e8b7c04"
+
+
+@respx.mock
+async def test_approving_a_challenge_sends_their_approve_value(adapter: LithicAdapter) -> None:
+    route = respx.post(CHALLENGE_RESPONSE_PATH).mock(return_value=httpx.Response(200))
+
+    response = await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.APPROVE)
+
+    assert route.called
+    sent = json.loads(route.calls.last.request.content)
+    assert {"token": CHALLENGE_TOKEN, "challenge_response": "APPROVE"} == sent
+    assert ChallengeDecision.APPROVE is response.decision
+    assert "lithic" == response.provider_id
+
+
+@respx.mock
+async def test_declining_sends_decline_by_customer_not_decline(adapter: LithicAdapter) -> None:
+    """The value is `DECLINE_BY_CUSTOMER`, and this is the test that pins it.
+
+    Their reference page's prose says `DECLINE`; the `challenge-response` schema in
+    the OpenAPI document that same page embeds says `DECLINE_BY_CUSTOMER`, and the
+    schema is the wire format. Sending the wrong one is a 400 on a challenge with
+    minutes to live — so the enum is worth an assertion of its own (§11.7).
+    """
+    route = respx.post(CHALLENGE_RESPONSE_PATH).mock(return_value=httpx.Response(200))
+
+    await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.DECLINE)
+
+    sent = json.loads(route.calls.last.request.content)
+    assert "DECLINE_BY_CUSTOMER" == sent["challenge_response"]
+
+
+@respx.mock
+async def test_a_bodyless_acknowledgement_is_a_success(adapter: LithicAdapter) -> None:
+    # "Challenge Response was received and forwarded to the ACS", with no response
+    # content. The first endpoint here that answers 200 with nothing at all, and
+    # until phase 7 the client read that as a malformed success.
+    respx.post(CHALLENGE_RESPONSE_PATH).mock(return_value=httpx.Response(200, content=b""))
+
+    response = await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.APPROVE)
+
+    # Nothing to point at, and saying so rather than inventing a reference.
+    assert response.provider_ref is None
+    assert {} == response.raw
+
+
+@respx.mock
+async def test_an_unknown_challenge_token_is_not_found(adapter: LithicAdapter) -> None:
+    """Their 404 has **no body at all**, which is not what the docs imply.
+
+    `error_challenge_not_found.json` is what the recorder captured from the real
+    sandbox: `_non_json_body: ""`, its marker for a response that is not JSON. Every
+    other Lithic error here answers with a `message` and a `debugging_request_id`,
+    and the reference page describes this one as "The provided token was not found"
+    — which reads like an error object. It is an empty body (§11.7).
+
+    So the failure path has to work without one, and this is the test that says so.
+    """
+    recorded = fixture("error_challenge_not_found")
+    assert "" == recorded["_non_json_body"], "the recorded 404 carried no body"
+    respx.post(CHALLENGE_RESPONSE_PATH).mock(return_value=httpx.Response(404, content=b""))
+
+    with pytest.raises(ChallengeNotFoundError) as raised:
+        await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.APPROVE)
+
+    assert CHALLENGE_TOKEN == raised.value.challenge_id
+    assert raised.value.retryable is False
+
+
+@respx.mock
+async def test_a_challenge_the_acs_has_closed_is_already_answered(adapter: LithicAdapter) -> None:
+    # Their 422: "response already set or status updated by upstream 3DS Service" —
+    # a timeout at the ACS, too many attempts, or a second answer. A fact about the
+    # challenge, not a provider failure, so it must not surface as a 502.
+    #
+    # This body is built from their `challenge-response-unprocessable` schema, which
+    # requires a `message`, rather than recorded: a real 422 needs a real challenge,
+    # and raising one needs the program configured for Out of Band challenges — a
+    # dashboard setting, not an API call. Said plainly because a documented shape is
+    # weaker evidence than a recorded one (§11.7).
+    respx.post(CHALLENGE_RESPONSE_PATH).mock(
+        return_value=httpx.Response(422, json={"message": "challenge already completed"})
+    )
+
+    with pytest.raises(ChallengeAlreadyAnsweredError, match="already completed"):
+        await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.APPROVE)
+
+
+@respx.mock
+async def test_a_provider_failure_stays_a_provider_failure(adapter: LithicAdapter) -> None:
+    # Everything that is not 404 or 422 is theirs and travels unchanged, so the API
+    # answers 502 rather than pretending the challenge is gone.
+    respx.post(CHALLENGE_RESPONSE_PATH).mock(
+        return_value=httpx.Response(400, json={"message": "malformed token"})
+    )
+
+    with pytest.raises(LithicApiError):
+        await adapter.respond_to_challenge(CHALLENGE_TOKEN, ChallengeDecision.APPROVE)

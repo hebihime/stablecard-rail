@@ -34,6 +34,8 @@ from app.issuers.base import (
     Cardholder,
     CardIssuerAdapter,
     CardState,
+    ChallengeDecision,
+    ChallengeResponse,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
@@ -255,6 +257,38 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
                 "safeCurrency": user.currency.symbol,
                 "dailyLimitIsPerSafe": True,
                 "chain": CHAIN_NAME,
+            },
+        )
+
+    # ----------------------------------------------------------- 3DS / OTP ----
+
+    async def respond_to_challenge(
+        self, challenge_id: str, decision: ChallengeDecision
+    ) -> ChallengeResponse:
+        """`POST /api/v1/cards/3ds/{id}/response` in shape (SPEC.md §6.5).
+
+        An extension, like the challenge webhook itself: Gnosis Pay publishes no 3DS
+        surface, and SPEC.md §6 leans on this simulator for the OTP path. Which makes
+        this the one provider here where the whole round trip is exercisable —
+        Lithic's needs a challenge their sandbox cannot raise, and Stripe has no
+        endpoint at all.
+
+        Translation in both directions, which is this file's job: our
+        `ChallengeDecision` becomes the simulator's answer string, and the
+        simulator's refusals arrive as the interface's own errors rather than as
+        anything mock-shaped.
+        """
+        challenge = self._simulator.answer_challenge(challenge_id, decision.value)
+        return ChallengeResponse(
+            provider_id=self.provider_id,
+            challenge_id=challenge_id,
+            decision=decision,
+            # Their acknowledgement names the answered challenge and the moment.
+            provider_ref=challenge.challenge_id,
+            raw={
+                "challengeId": challenge.challenge_id,
+                "response": challenge.answer,
+                "answeredAt": challenge.answered_at.isoformat() if challenge.answered_at else None,
             },
         )
 

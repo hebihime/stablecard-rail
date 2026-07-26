@@ -314,6 +314,7 @@ async def walk(rec: Recorder) -> None:
         expect=404,
     )
     await rec.call("GET", "/cards/not-a-uuid", name="error_invalid_uuid", expect=400)
+    await record_challenge_error(rec)
 
     print("\nclosing the card, then a change refused on it")
     await rec.call(
@@ -325,6 +326,37 @@ async def walk(rec: Recorder) -> None:
         name="error_card_closed",
         json_body={"state": "OPEN"},
         expect=405,
+    )
+
+
+async def record_challenge_error(rec: Recorder) -> None:
+    """The 404 from the 3DS challenge-response endpoint (SPEC.md §6.5, phase 7).
+
+    The only part of that endpoint this sandbox can be made to answer. A challenge
+    needs `POST /three_ds_authentication/simulate` to produce a `PENDING_CHALLENGE`
+    result, and that needs the program configured for Out of Band challenges — which
+    is a program setting, not an API call, so it cannot be arranged from here.
+
+    Recording the refusal is still worth the round trip, and this is why: it proves
+    the path exists at the version we are calling, that a bare `Authorization` header
+    authenticates it, that the request body is accepted as JSON (a malformed body
+    would be a 400, not a 404), and what their error envelope looks like when the
+    token is unknown. All four are assumptions the adapter makes, and all four were
+    read off a document until this ran.
+
+    Read-only: an unknown token changes nothing at their end, which is what makes it
+    safe to record against jp's account.
+    """
+    print("\n3DS challenge response (unknown token — read-only)")
+    await rec.call(
+        "POST",
+        "/three_ds_decisioning/challenge_response",
+        name="error_challenge_not_found",
+        json_body={
+            "token": "00000000-0000-4000-8000-000000000999",
+            "challenge_response": "APPROVE",
+        },
+        expect=404,
     )
 
 
@@ -341,6 +373,15 @@ async def record_unauthorized(base_url: str, seconds: float, rec: Recorder) -> N
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="walk the API, write no files")
+    parser.add_argument(
+        "--only-challenge-error",
+        action="store_true",
+        help=(
+            "record only the 3DS challenge-response 404 — read-only, creates nothing. "
+            "A full walk creates cards and simulates transactions, and re-recording "
+            "the whole set to add one fixture moves every other one with it"
+        ),
+    )
     args = parser.parse_args()
 
     settings = get_lithic_settings()
@@ -362,9 +403,12 @@ async def main() -> int:
         timeout=settings.request_timeout_seconds,
     ) as client:
         rec = Recorder(client, dry_run=args.dry_run)
-        await walk(rec)
-        print("\nunauthenticated request")
-        await record_unauthorized(settings.api_base_url, settings.request_timeout_seconds, rec)
+        if args.only_challenge_error:
+            await record_challenge_error(rec)
+        else:
+            await walk(rec)
+            print("\nunauthenticated request")
+            await record_unauthorized(settings.api_base_url, settings.request_timeout_seconds, rec)
 
     where = "(dry run, nothing written)" if args.dry_run else str(FIXTURES)
     print(f"\n{len(rec.written)} fixtures {where}")

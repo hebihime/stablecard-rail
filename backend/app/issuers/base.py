@@ -39,6 +39,11 @@ __all__ = [
     "CardState",
     "Cardholder",
     "CardholderNotFoundError",
+    "ChallengeAlreadyAnsweredError",
+    "ChallengeDecision",
+    "ChallengeNotFoundError",
+    "ChallengeResponse",
+    "ChallengeResponseUnsupported",
     "CreateCardRequest",
     "CreateCardholderRequest",
     "FundingModel",
@@ -91,6 +96,19 @@ class CardEventType(StrEnum):
     THREE_DS_CHALLENGE = "three_ds_challenge"
     CARD_LIFECYCLE = "card_lifecycle"
     UNMAPPED = "unmapped"
+
+
+class ChallengeDecision(StrEnum):
+    """What a cardholder said about a 3DS challenge (SPEC.md §6.5).
+
+    Two values, because a challenge has two answers. Deliberately *not* the
+    providers' spellings — Lithic's wire value for a decline is
+    `DECLINE_BY_CUSTOMER`, and translating that is the adapter's job, exactly as it
+    is for every other provider vocabulary here.
+    """
+
+    APPROVE = "approve"
+    DECLINE = "decline"
 
 
 class FundingStatus(StrEnum):
@@ -156,6 +174,56 @@ class FundingRejectedError(IssuerError):
     def __init__(self, card_id: str, reason: str) -> None:
         super().__init__(f"funding rejected for card {card_id}: {reason}")
         self.card_id = card_id
+        self.reason = reason
+
+
+class ChallengeResponseUnsupported(IssuerError):
+    """This provider has no way to be told what the cardholder decided.
+
+    Not a failure of ours and not a provider outage — a **capability gap**, which
+    SPEC.md §6.5 anticipates: the response is "posted back through the adapter where
+    the sandbox supports it; otherwise ledgered as `responded` with the payload that
+    would be sent". So the OTP service catches this and records the decision instead
+    of failing the request.
+
+    Stripe Issuing is the case that makes it necessary: it publishes no issuer-facing
+    3DS challenge at all (docs/ARCHITECTURE.md §8.8), so there is nothing to respond
+    to and no endpoint to respond on. Never retryable — waiting does not give a
+    provider an API it does not have.
+    """
+
+    def __init__(self, provider_id: str) -> None:
+        super().__init__(
+            f"{provider_id} has no challenge-response endpoint; "
+            f"the decision can be recorded but not delivered",
+            retryable=False,
+        )
+        self.provider_id = provider_id
+
+
+class ChallengeNotFoundError(IssuerError):
+    """The provider does not recognise this challenge.
+
+    Distinct from our own store not holding it: this is the provider saying the
+    token is unknown — expired at their end, or belonging to another program.
+    """
+
+    def __init__(self, challenge_id: str) -> None:
+        super().__init__(f"no such 3DS challenge at this provider: {challenge_id!r}")
+        self.challenge_id = challenge_id
+
+
+class ChallengeAlreadyAnsweredError(IssuerError):
+    """The challenge has already been decided, by us or by a timeout.
+
+    A 3DS challenge is single-use and short-lived, so a second answer is either a
+    duplicate request or one that arrived after the ACS gave up. Never retryable —
+    the outcome is already fixed, whatever it was.
+    """
+
+    def __init__(self, challenge_id: str, reason: str) -> None:
+        super().__init__(f"3DS challenge {challenge_id} can no longer be answered: {reason}")
+        self.challenge_id = challenge_id
         self.reason = reason
 
 
@@ -232,6 +300,21 @@ class FundingResult(_Frozen):
     issuer_funding_ref: str | None = None
     status: FundingStatus
     amount: Money
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChallengeResponse(_Frozen):
+    """What came back from telling a provider the cardholder's decision.
+
+    `provider_ref` is `None` for a provider that acknowledges without naming
+    anything — Lithic's challenge-response endpoint answers 200 with no body at all,
+    which is the honest "received, nothing to point at".
+    """
+
+    provider_id: str
+    challenge_id: str
+    decision: ChallengeDecision
+    provider_ref: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -351,6 +434,32 @@ class CardIssuerAdapter(ABC):
         Unknown provider event types map to `CardEventType.UNMAPPED`. Raise
         `WebhookParseError` only when the body itself is unreadable.
         """
+
+    async def respond_to_challenge(
+        self, challenge_id: str, decision: ChallengeDecision
+    ) -> ChallengeResponse:
+        """Tell the provider what the cardholder decided (SPEC.md §6.5).
+
+        **Not abstract, and the default raises.** `webhook_event_id` set the
+        precedent: an interface method that only some providers can honour belongs
+        here with a default, not as an obligation every adapter has to fake. The
+        alternative was worse in both directions — making it abstract would force
+        Stripe's adapter to implement a method for an endpoint that does not exist,
+        and leaving it off the interface entirely would mean `otp/` reaching into a
+        concrete adapter to find out, which is the coupling
+        `tests/test_module_boundaries.py` exists to prevent.
+
+        So the capability gap is expressed in the type system: a provider that cannot
+        accept a response raises `ChallengeResponseUnsupported`, and the caller
+        ledgers the decision instead of delivering it — which is precisely the
+        fallback §6.5 describes.
+
+        Raises:
+            ChallengeResponseUnsupported: this provider has no such endpoint.
+            ChallengeNotFoundError: the provider does not know this challenge.
+            ChallengeAlreadyAnsweredError: it has already been decided or has timed out.
+        """
+        raise ChallengeResponseUnsupported(self.provider_id)
 
     def webhook_event_id(self, headers: Mapping[str, str], body: bytes) -> str | None:
         """Dedup id read from the envelope, before parsing (SPEC.md §4).

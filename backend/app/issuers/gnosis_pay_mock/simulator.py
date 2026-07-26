@@ -40,6 +40,8 @@ from app.issuers.base import (
     CardholderNotFoundError,
     CardNotFoundError,
     CardState,
+    ChallengeAlreadyAnsweredError,
+    ChallengeNotFoundError,
     FundingRejectedError,
     FundingResult,
     FundingStatus,
@@ -295,6 +297,25 @@ class SafeDeposit:
 
 
 @dataclass(slots=True)
+class ChallengeRecord:
+    """A 3DS challenge this simulator has issued, and what became of it.
+
+    An extension rather than a documented Gnosis Pay object — see
+    `EXTENSION_EVENT_TYPES` — modelled on the state a real ACS keeps: a challenge is
+    open until it is answered or it expires, and it can be answered exactly once.
+    """
+
+    challenge_id: str
+    card_id: str
+    code: str
+    issued_at: datetime
+    expires_at: datetime
+    #: `None` while open; `"approve"` or `"decline"` once answered.
+    answer: str | None = None
+    answered_at: datetime | None = None
+
+
+@dataclass(slots=True)
 class TransactionRecord:
     thread_id: str
     card_token: str
@@ -357,6 +378,11 @@ class GnosisPaySimulator:
         #: `funding_ref` -> the result returned the first time. The whole of
         #: `fund_card` idempotency (SPEC.md §10) is this dictionary.
         self._fundings: dict[str, FundingResult] = {}
+        #: Challenges this simulator has issued, so it can accept an answer to one.
+        #: A real ACS holds the same state; without it `respond_to_challenge` would
+        #: have nothing to refuse, and "answer a challenge that does not exist"
+        #: would silently succeed.
+        self._challenges: dict[str, ChallengeRecord] = {}
         self._ephemeral: dict[str, tuple[str, datetime]] = {}
         self._spent_ephemeral: set[str] = set()
         self._deliveries: list[Delivery] = []
@@ -1139,16 +1165,54 @@ class GnosisPaySimulator:
         the challenge has a deadline of its own and the code should not outlive it.
         """
         card = self._require_card(card_id)
+        issued_at = self._now()
+        challenge = ChallengeRecord(
+            challenge_id=self._next("3ds"),
+            card_id=card_id,
+            code=code,
+            issued_at=issued_at,
+            expires_at=issued_at + timedelta(seconds=ttl_seconds),
+        )
+        self._challenges[challenge.challenge_id] = challenge
         return self._emit(
             EXTENSION_EVENT_TYPES["three_ds_challenge"],
             {
                 "userId": card.user_id,
                 "cardToken": card.card_token,
-                "challengeId": self._next("3ds"),
-                "otpCode": code,
-                "expiresAt": (self._now() + timedelta(seconds=ttl_seconds)).isoformat(),
+                "challengeId": challenge.challenge_id,
+                "otpCode": challenge.code,
+                "expiresAt": challenge.expires_at.isoformat(),
             },
         )
+
+    def get_challenge(self, challenge_id: str) -> ChallengeRecord | None:
+        """One issued challenge, open or answered. For tests and the demo."""
+        return self._challenges.get(challenge_id)
+
+    def answer_challenge(self, challenge_id: str, answer: str) -> ChallengeRecord:
+        """Record the cardholder's decision, once.
+
+        `POST /api/v1/cards/3ds/{id}/response` in shape — an extension, since Gnosis
+        Pay publishes no 3DS surface at all. What it models is the part a real ACS
+        enforces and a naive mock would not: a challenge is answerable exactly once,
+        and only before it expires. Both refusals exist so the adapter above has
+        something real to translate (docs/ARCHITECTURE.md §11.7).
+        """
+        challenge = self._challenges.get(challenge_id)
+        if challenge is None:
+            raise ChallengeNotFoundError(challenge_id)
+        if challenge.answer is not None:
+            raise ChallengeAlreadyAnsweredError(
+                challenge_id, f"answered {challenge.answer} at {challenge.answered_at}"
+            )
+        now = self._now()
+        if now >= challenge.expires_at:
+            raise ChallengeAlreadyAnsweredError(
+                challenge_id, f"expired at {challenge.expires_at.isoformat()}"
+            )
+        challenge.answer = answer
+        challenge.answered_at = now
+        return challenge
 
     def emit_user_created(self, user_id: str) -> Delivery:
         """`user.created`. An account event, not a card event: `unmapped` for us."""

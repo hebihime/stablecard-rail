@@ -32,6 +32,9 @@ from app.issuers.base import (
     CardholderNotFoundError,
     CardNotFoundError,
     CardState,
+    ChallengeAlreadyAnsweredError,
+    ChallengeDecision,
+    ChallengeNotFoundError,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
@@ -905,6 +908,66 @@ async def test_an_event_that_carries_no_code_is_not_rewritten(
 
     event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert json.loads(delivery.body) == event.raw
+
+
+async def test_a_challenge_can_be_answered_once(adapter: GnosisPayMockAdapter) -> None:
+    # The one provider here where the whole round trip is exercisable: Lithic's needs
+    # a challenge their sandbox cannot raise, and Stripe has no endpoint at all.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert event.challenge_id is not None
+
+    response = await adapter.respond_to_challenge(event.challenge_id, ChallengeDecision.APPROVE)
+
+    assert ChallengeDecision.APPROVE is response.decision
+    assert event.challenge_id == response.provider_ref
+    assert "approve" == response.raw["response"]
+    answered = adapter.simulator.get_challenge(event.challenge_id)
+    assert answered is not None
+    assert "approve" == answered.answer
+
+
+async def test_a_decline_is_recorded_as_a_decline(adapter: GnosisPayMockAdapter) -> None:
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert event.challenge_id is not None
+
+    await adapter.respond_to_challenge(event.challenge_id, ChallengeDecision.DECLINE)
+
+    answered = adapter.simulator.get_challenge(event.challenge_id)
+    assert answered is not None
+    assert "decline" == answered.answer
+
+
+async def test_answering_an_unknown_challenge_is_refused(adapter: GnosisPayMockAdapter) -> None:
+    with pytest.raises(ChallengeNotFoundError):
+        await adapter.respond_to_challenge("3ds_nope", ChallengeDecision.APPROVE)
+
+
+async def test_a_challenge_cannot_be_answered_twice(adapter: GnosisPayMockAdapter) -> None:
+    # What a real ACS enforces and a naive mock would not. Without it the adapter
+    # above would have nothing to translate, and a duplicate answer would look fine.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert event.challenge_id is not None
+    await adapter.respond_to_challenge(event.challenge_id, ChallengeDecision.APPROVE)
+
+    with pytest.raises(ChallengeAlreadyAnsweredError, match="answered approve"):
+        await adapter.respond_to_challenge(event.challenge_id, ChallengeDecision.DECLINE)
+
+
+async def test_an_expired_challenge_cannot_be_answered(adapter: GnosisPayMockAdapter) -> None:
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id, ttl_seconds=60)
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert event.challenge_id is not None
+    adapter.simulator.advance_clock(FIXED_NOW + timedelta(seconds=61))
+
+    with pytest.raises(ChallengeAlreadyAnsweredError, match="expired"):
+        await adapter.respond_to_challenge(event.challenge_id, ChallengeDecision.APPROVE)
 
 
 @pytest.mark.parametrize("event_type", ["user.created", "user.tos.accepted", "kyc.status.changed"])

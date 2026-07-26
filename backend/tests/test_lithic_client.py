@@ -305,3 +305,59 @@ async def test_a_page_that_is_not_a_list_is_refused(sleeps: Sleeps) -> None:
 
     with pytest.raises(LithicApiError, match="data"):
         await make_client(sleeps).list_all("/transactions")
+
+
+# ------------------------------------------------------ a success with no body ----
+
+
+@respx.mock
+async def test_a_bodyless_success_is_refused_by_default(sleeps: Sleeps) -> None:
+    # The strictness that was there before phase 7 and is worth keeping: a list
+    # endpoint that suddenly answered 200 with nothing would otherwise read as "no
+    # records", which is a wrong answer rather than an error.
+    respx.get(f"{BASE_URL}/cards").mock(return_value=httpx.Response(200, content=b""))
+
+    with pytest.raises(LithicApiError, match="not JSON"):
+        await make_client(sleeps).get("/cards")
+
+
+@respx.mock
+async def test_a_bodyless_success_is_accepted_where_the_caller_expects_one(
+    sleeps: Sleeps,
+) -> None:
+    """Opt-in per call, for the one endpoint that answers 200 with nothing.
+
+    Their 3DS challenge-response endpoint is documented as "Challenge Response was
+    received and forwarded to the ACS" with no response content, and the recorded
+    404 from it has no body either. Relaxing this globally would have been the wrong
+    fix (see the test above); the caller that knows says so (§11.7).
+    """
+    respx.post(f"{BASE_URL}/three_ds_decisioning/challenge_response").mock(
+        return_value=httpx.Response(200, content=b"")
+    )
+
+    answered = await make_client(sleeps).post(
+        "/three_ds_decisioning/challenge_response",
+        json_body={"token": "t", "challenge_response": "APPROVE"},
+        allow_empty_body=True,
+    )
+
+    assert {} == answered
+
+
+@respx.mock
+async def test_a_failure_with_no_body_still_carries_its_status(sleeps: Sleeps) -> None:
+    # What the real sandbox does for an unknown 3DS token: 404 and nothing else. The
+    # adapter maps on the status, so an absent error envelope must not become a
+    # different kind of failure on the way up.
+    respx.post(f"{BASE_URL}/three_ds_decisioning/challenge_response").mock(
+        return_value=httpx.Response(404, content=b"")
+    )
+
+    with pytest.raises(LithicApiError) as raised:
+        await make_client(sleeps).post(
+            "/three_ds_decisioning/challenge_response", allow_empty_body=True
+        )
+
+    assert 404 == raised.value.status
+    assert raised.value.request_id is None

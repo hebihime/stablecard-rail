@@ -40,7 +40,13 @@ from typing import Any
 import pytest
 
 from app.core.money import Money
-from app.issuers.base import CardEventType, CardState, WebhookParseError
+from app.issuers.base import (
+    CardEventType,
+    CardState,
+    ChallengeDecision,
+    ChallengeResponseUnsupported,
+    WebhookParseError,
+)
 from app.issuers.stripe_issuing import adapter as stripe_adapter
 from app.issuers.stripe_issuing.adapter import PROVIDER_ID, StripeIssuingAdapter
 from app.issuers.stripe_issuing.client import StripeClient
@@ -552,6 +558,28 @@ async def test_stripe_has_no_three_ds_challenge_to_normalize(
     # the mock adapter's simulator, which SPEC.md §6 already allows for. If Stripe
     # ever adds one, `CardEventType` already has the member.
     assert CardEventType.THREE_DS_CHALLENGE in set(CardEventType)
+
+
+async def test_stripe_has_nowhere_to_send_a_challenge_response_either(
+    adapter: StripeIssuingAdapter,
+) -> None:
+    """The other half of §8.8, and phase 7's test of the phase-4 promise.
+
+    Adding `respond_to_challenge` to the interface changed nothing in this adapter:
+    it inherits the default, which raises. That is the honest answer — a provider
+    that publishes no issuer-facing challenge has nothing to respond to and no
+    endpoint to respond on — and SPEC.md §6.5 covers it by having the OTP service
+    ledger the decision instead of delivering it.
+
+    Worth an assertion because the alternative shapes were both worse: an abstract
+    method would have forced an implementation here for an endpoint that does not
+    exist, which is exactly the "one file per issuer" tax phase 4 exists to avoid.
+    """
+    with pytest.raises(ChallengeResponseUnsupported) as raised:
+        await adapter.respond_to_challenge("3ds_1", ChallengeDecision.APPROVE)
+
+    assert "stripe_issuing" == raised.value.provider_id
+    assert raised.value.retryable is False
 
 
 # ---------------------------------------------------------------- raw data ----

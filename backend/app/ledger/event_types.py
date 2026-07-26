@@ -46,6 +46,11 @@ OTP_DELIVERED = "otp.delivered"
 #: A challenge arrived that could not be served — expired on arrival, so far. The
 #: cardholder cannot complete the payment and only the ledger would ever say why.
 OTP_UNDELIVERABLE = "otp.undeliverable"
+#: The cardholder approved or declined. Written whether or not the provider had
+#: anywhere to send it: SPEC.md §6.5 asks for the decision to be ledgered "with the
+#: payload that would be sent" when it cannot be delivered, so `delivered` in the
+#: payload is what separates the two.
+OTP_RESPONDED = "otp.responded"
 
 #: Namespace for everything a provider told us, as opposed to something we did.
 PROVIDER_PREFIX = "provider"
@@ -74,6 +79,7 @@ __all__ = [
     "INTENT_RETRIED",
     "INTENT_TRANSITIONED",
     "OTP_DELIVERED",
+    "OTP_RESPONDED",
     "OTP_UNDELIVERABLE",
     "PROVIDER_PREFIX",
     "TRANSFER_IGNORED",

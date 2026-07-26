@@ -42,6 +42,10 @@ from app.issuers.base import (
     CardIssuerAdapter,
     CardNotFoundError,
     CardState,
+    ChallengeAlreadyAnsweredError,
+    ChallengeDecision,
+    ChallengeNotFoundError,
+    ChallengeResponse,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
@@ -111,6 +115,16 @@ TARGET_STATES: Mapping[CardState, str] = {
     CardState.ACTIVE: "OPEN",
     CardState.FROZEN: "PAUSED",
     CardState.CANCELED: "CLOSED",
+}
+
+#: Ours -> theirs, for a 3DS challenge response. **`DECLINE_BY_CUSTOMER`, not
+#: `DECLINE`**: the value comes from the `challenge-response` schema's `enum` in the
+#: OpenAPI document their reference page embeds, which is the wire format, and it
+#: disagrees with the prose summary on that same page. Read the schema
+#: (docs/ARCHITECTURE.md §11.7).
+CHALLENGE_RESPONSES: Mapping[ChallengeDecision, str] = {
+    ChallengeDecision.APPROVE: "APPROVE",
+    ChallengeDecision.DECLINE: "DECLINE_BY_CUSTOMER",
 }
 
 #: Lithic requires a phone number and a postal address that SPEC.md §3.1's
@@ -430,6 +444,54 @@ class LithicAdapter(CardIssuerAdapter):
             str(card.get("cardholder_currency") or "USD"),
         )
 
+    # ----------------------------------------------------------- 3DS / OTP ----
+
+    async def respond_to_challenge(
+        self, challenge_id: str, decision: ChallengeDecision
+    ) -> ChallengeResponse:
+        """`POST /three_ds_decisioning/challenge_response` (SPEC.md §6.5).
+
+        Lithic really does have this endpoint, which is what makes their side of §6.5
+        the "where the sandbox supports it" case rather than the fallback. It is the
+        other end of the `three_ds_authentication.challenge` webhook: their
+        customer-orchestrated flow hands the challenge to the card program, and this
+        is how the program hands back what the cardholder said.
+
+        Two details taken from their **embedded OpenAPI** rather than from the prose,
+        because the two disagree and only one of them is the wire format:
+
+        * the decline value is `DECLINE_BY_CUSTOMER`, not `DECLINE` — the reference
+          page's own summary says otherwise, the `challenge-response` schema's `enum`
+          does not (docs/ARCHITECTURE.md §11.7);
+        * success is **200 with no body at all**, described as "Challenge Response was
+          received and forwarded to the ACS", which is why the client had to learn
+          that a bodyless success is not a malformed one.
+
+        Their 422 is worth its own error: "response already set or status updated by
+        upstream 3DS Service" — a challenge that timed out at the ACS, or a second
+        answer. Neither is retryable and neither is a provider failure.
+        """
+        try:
+            answered = await self._client.post(
+                "/three_ds_decisioning/challenge_response",
+                json_body={
+                    "token": challenge_id,
+                    "challenge_response": CHALLENGE_RESPONSES[decision],
+                },
+                allow_empty_body=True,
+            )
+        except LithicApiError as exc:
+            raise _translate_challenge(challenge_id, exc) from exc
+        return ChallengeResponse(
+            provider_id=self.provider_id,
+            challenge_id=challenge_id,
+            decision=decision,
+            # Nothing to point at: their acknowledgement carries no body, so
+            # inventing a reference here would be claiming they named one.
+            provider_ref=None,
+            raw=answered,
+        )
+
     # ------------------------------------------------------------ webhooks ----
 
     async def verify_webhook(self, headers: Mapping[str, str], body: bytes) -> bool:
@@ -652,6 +714,22 @@ def _dispute_amount(payload: Mapping[str, Any]) -> Money | None:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _translate_challenge(challenge_id: str, exc: LithicApiError) -> IssuerError:
+    """A challenge-response failure -> the vocabulary in `issuers/base.py`.
+
+    404 is "The provided token was not found"; 422 is "response already set or
+    status updated by upstream 3DS Service", which covers a timeout at the ACS, too
+    many attempts, and a second answer. Both are facts about the challenge rather
+    than provider failures, so neither should surface as a 502. Anything else is
+    theirs and travels unchanged.
+    """
+    if exc.status == 404:
+        return ChallengeNotFoundError(challenge_id)
+    if exc.status == 422:
+        return ChallengeAlreadyAnsweredError(challenge_id, exc.message)
+    return exc
 
 
 # ---------------------------------------------------------------- funding ----

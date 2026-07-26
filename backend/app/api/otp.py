@@ -22,13 +22,17 @@ import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.db import get_session
 from app.core.redis import get_redis
 from app.core.time import utcnow
+from app.issuers.base import ChallengeDecision
 from app.otp.push import listen
+from app.otp.service import answer_challenge
 from app.otp.store import OtpChallenge, OtpStore
 
 router = APIRouter(tags=["otp"])
@@ -36,6 +40,7 @@ router = APIRouter(tags=["otp"])
 logger = logging.getLogger(__name__)
 
 RedisClient = Annotated[Redis, Depends(get_redis)]
+Session = Annotated[AsyncSession, Depends(get_session)]
 
 
 class PendingChallengeOut(BaseModel):
@@ -92,6 +97,67 @@ async def list_pending_challenges(
     pending = await store.pending(now=now, card_id=card_id, limit=limit)
     challenges = [PendingChallengeOut.of(challenge, now=now) for challenge in pending]
     return PendingChallenges(count=len(challenges), challenges=challenges)
+
+
+class ChallengeResponseIn(BaseModel):
+    """What the modal's two buttons send (SPEC.md §6.4)."""
+
+    decision: ChallengeDecision
+
+
+class ChallengeResponseOut(BaseModel):
+    provider_id: str
+    challenge_id: str
+    decision: ChallengeDecision
+    #: `False` when the provider has no endpoint to accept a response. The decision
+    #: is ledgered either way — that is SPEC.md §6.5's fallback, not a failure.
+    delivered: bool
+    provider_ref: str | None
+    detail: str | None
+
+
+@router.post(
+    "/otp/{provider_id}/{challenge_id}/respond",
+    response_model=ChallengeResponseOut,
+    summary="Approve or decline an open 3DS challenge",
+)
+async def respond_to_challenge(
+    session: Session,
+    redis: RedisClient,
+    provider_id: Annotated[str, Path(description="Issuer registry key")],
+    challenge_id: Annotated[str, Path(description="The provider's challenge identifier")],
+    body: ChallengeResponseIn,
+) -> ChallengeResponseOut:
+    """Post the cardholder's decision back to the provider, or record it.
+
+    The provider is in the path because the store is keyed on the pair: two
+    providers numbering their challenges from 1 is normal, and `challenge_id` alone
+    would be ambiguous. `GET /otp/pending` already returns both.
+
+    A challenge that is not open answers **404**, and that covers three cases which
+    are the same fact from the client's side: never delivered, expired, or already
+    answered. Deliberately HTTP rather than a message on the socket — a cardholder
+    whose socket has dropped must still be able to answer, which is the same reason
+    polling is the contract in §6.3.
+    """
+    challenge = await OtpStore(redis).get(provider_id, challenge_id)
+    if challenge is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"no open 3DS challenge {challenge_id!r} at {provider_id!r}; "
+                f"it may have expired or already been answered"
+            ),
+        )
+    answer = await answer_challenge(session, redis, challenge, body.decision, now=utcnow())
+    return ChallengeResponseOut(
+        provider_id=provider_id,
+        challenge_id=challenge_id,
+        decision=answer.decision,
+        delivered=answer.delivered,
+        provider_ref=answer.provider_ref,
+        detail=answer.detail,
+    )
 
 
 @router.websocket("/ws/otp")

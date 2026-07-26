@@ -25,6 +25,8 @@ from app.issuers.base import (
     CardIssuerAdapter,
     CardNotFoundError,
     CardState,
+    ChallengeDecision,
+    ChallengeResponseUnsupported,
     CreateCardholderRequest,
     CreateCardRequest,
     FundingModel,
@@ -37,6 +39,7 @@ from app.issuers.base import (
 )
 from app.issuers.lithic.client import LithicApiError
 from app.issuers.stripe_issuing.client import StripeApiError
+from tests.support import StubIssuerAdapter
 
 #: Exactly the methods SPEC.md §3.1 specifies, plus the two documented additions
 #: (docs/ARCHITECTURE.md §3.3): `get_card` and `webhook_event_id`.
@@ -51,7 +54,7 @@ SPEC_METHODS = (
     "verify_webhook",
     "parse_webhook",
 )
-ADDED_METHODS = ("get_card", "webhook_event_id")
+ADDED_METHODS = ("get_card", "webhook_event_id", "respond_to_challenge")
 
 
 @pytest.mark.parametrize("name", SPEC_METHODS)
@@ -83,6 +86,35 @@ def test_both_webhook_methods_see_the_delivery_headers(name: str) -> None:
     # (docs/ARCHITECTURE.md §4.1). This deviates from SPEC.md §3.1's sketch.
     params = list(inspect.signature(getattr(CardIssuerAdapter, name)).parameters)
     assert ["self", "headers", "body"] == params
+
+
+async def test_responding_to_a_challenge_is_optional_for_adapters() -> None:
+    """The capability gap SPEC.md §6.5 anticipates, expressed in the type system.
+
+    Stripe publishes no issuer-facing 3DS challenge (§8.8), so there is nothing to
+    respond to and no endpoint to respond on. Making the method abstract would force
+    an implementation of something that does not exist; leaving it off the interface
+    would make `otp/` reach into a concrete adapter to find out — the coupling
+    `test_module_boundaries.py` exists to prevent. So it is here, with a default that
+    raises, and the caller ledgers the decision instead of delivering it.
+    """
+    assert "respond_to_challenge" not in CardIssuerAdapter.__abstractmethods__
+
+    class BareAdapter(StubIssuerAdapter):
+        provider_id = "bare_provider"
+
+    with pytest.raises(ChallengeResponseUnsupported) as raised:
+        await BareAdapter().respond_to_challenge("3ds_1", ChallengeDecision.APPROVE)
+
+    assert "bare_provider" == raised.value.provider_id
+    # Not retryable: waiting does not give a provider an API it does not have.
+    assert raised.value.retryable is False
+
+
+def test_a_challenge_has_exactly_two_answers() -> None:
+    # And they are ours, not a provider's. Lithic's wire value for a decline is
+    # `DECLINE_BY_CUSTOMER`; translating that is the adapter's job.
+    assert {member.value for member in ChallengeDecision} == {"approve", "decline"}
 
 
 def test_webhook_event_id_is_optional_for_adapters() -> None:
