@@ -1823,3 +1823,139 @@ retry, which is the exact failure the split exists to avoid.
 because the cursor is only advanced for what was fully accounted for, nothing is
 lost meanwhile. Verified against a live 429 from the public devnet endpoint, which
 is also where `error_rate_limited.json` came from.
+
+## 10. Decisions recorded in phase 6
+
+Phase 6 replaces the simulator with a real protocol behind the same two calls.
+The simulator stays — SPEC.md §5.2 keeps it as the default so a recorded demo never
+depends on a third party's testnet — so this phase is a second implementation of an
+interface phase 5 designed without one, which makes it the test of §9.2.
+
+### 10.1 Wormhole, because deBridge has no testnet at all
+
+SPEC.md §5.2 names `debridge.py` first and asks for research at build time. The
+research disqualifies it in one line, from deBridge's own FAQ:
+
+> Which testnets are supported? deBridge does not support testnets. The protocol
+> relies on extensive on-chain infrastructure across multiple chains, making testnet
+> maintenance impractical.
+
+Confirmed against the live API rather than only the docs:
+`GET https://dln.debridge.finance/v1.0/supported-chains-info` returns mainnet chain
+ids only (Solana `7565164`, BSC `56`), and no testnet API host exists. This is not an
+oversight to work around — it follows from what DLN *is*. A solver-filled network
+needs market makers holding real inventory on both chains, and nobody funds inventory
+on a testnet. **Any intent-based route is unavailable for the same reason**, which
+rules out Mayan and LiFi's solver routes too.
+
+Wormhole's Wrapped Token Transfers is lock-and-mint: guardians observe and sign, and
+the destination leg is a contract call anyone can make. Nothing about it needs a
+funded third party, so it is the kind of protocol that *can* exist on a testnet — and
+it does.
+
+**The docs say the route does not exist. The chain says it does.** The supported-
+networks table has a **Devnet** column marked ❌ for Solana, and read literally that
+is the answer to this phase's question. It means Wormhole's own local Tilt devnet,
+not Solana devnet; Wormhole's **Testnet** for Solana *is* Solana devnet. Established
+by probing rather than by reading:
+
+| Probe | Result |
+| --- | --- |
+| Core + Token Bridge programs from the docs' Testnet tab, on `api.devnet.solana.com` | both exist, `executable = true`, owned by the BPF upgradeable loader |
+| the same two on `api.testnet.solana.com` | one is a plain system account, the other missing entirely |
+| Token Bridge emitter, derived locally as `find_program_address([b"emitter"], DZnkk…)` | `4yttKWzRoNYS2HekxDfcZYmfQqnVWpKiJ8eydYRuFRgs`, which is exactly the `emitterNativeAddr` testnet Wormholescan reports for chain 1 |
+| guardian liveness on that emitter | signed VAA sequence 56910 at 2026-07-25T01:00:38Z — hours old, not abandoned |
+| `wrappedAsset(1, <devnet USDC mint>)` on the BSC testnet Token Bridge | `0x51a3cc54ea30da607974c5d07b8502599801ac08` — non-zero, so the asset is **already attested** and this phase does not have to run `attest_token` / `create_wrapped` |
+
+The two derived facts are the ones worth keeping: an emitter address that matches
+what the explorer independently reports proves the *program* in the docs is the
+program the guardians are watching, and a non-zero `wrappedAsset` proves the
+destination side of the route is already open. Both took one RPC call. The habit is
+§8.10's, learned the expensive way from Stripe: **the network is the documentation.**
+
+**The route is Solana devnet → BSC testnet**, which SPEC.md §5.2 permits explicitly
+("implement the real adapter against any available Solana-devnet→EVM-testnet route
+to prove the mechanics, and document the mainnet route choice"). Fees and delivery
+mechanics are in §10.2.
+
+**The mainnet route choice, and a §5.2 assumption that has expired.** §5.2 predicts
+the real product bridges Solana → Gnosis Chain because that is where a Gnosis Pay
+card's Safe lives, and offers deBridge and LiFi as the candidates. Neither serves it
+today, and the third does not either:
+
+- **deBridge** — no Gnosis Chain in the supported-chains list at all any more. §5.2's
+  "deBridge lists Gnosis support" was true when the SPEC was written; it is stale.
+- **Wormhole** — no Gnosis deployment on *any* network. Gnosis has no Wormhole chain
+  id, and the Executor capability endpoints list no chain 25 on mainnet or testnet.
+- **LiFi**, the aggregator §5.2 names as the fallback — `GET /v1/chains` lists Gnosis
+  (100) and **no Solana at all**, and a mainnet quote request for Solana USDC → Gnosis
+  USDC answers `1002 No available quotes for the requested transfer`.
+
+So the honest mainnet answer is that Solana → Gnosis Chain is **a two-hop route**:
+bridge Solana → an EVM chain that both sides support (Wormhole or CCTP into Polygon
+or Ethereum), then Gnosis's own canonical omnibridge into Gnosis Chain. That is a
+different reconciliation problem from what this phase builds — two independent legs,
+each with its own reference and its own failure mode, and an intermediate balance
+that belongs to nobody while it waits. `BridgeProvider` can hold it (a composite
+implementation whose `bridge_ref` names both legs), but it is not what a testnet can
+demonstrate, and inventing it here would be the "shaped like the first
+implementation" mistake §9.2 exists to avoid.
+
+### 10.2 What a lock-and-mint route changes about reconciliation
+
+SPEC.md §11 asks what a third-party bridge implies for reconciliation. The simulator
+answered the easy half. The real one changes five things, and they are not the five
+§9.2 anticipated.
+
+**1. The destination leg is ours, so `status()` has to act.** With a solver-filled
+route, `BRIDGING → BRIDGED` happens whether or not this service is running: someone
+else is paid to complete it. Lock-and-mint has no such someone. The VAA sits signed
+and unredeemed until a transaction submits it to BSC testnet, which means **a
+transfer can be permanently stuck in a state that is otherwise indistinguishable from
+healthy in-flight.** The reconciler's mandate (SPEC.md §5.3, "re-query the relevant
+system") is not enough on its own — re-querying a stuck transfer returns "still
+pending" forever. So redemption happens *inside* the adapter's `status()`: if the
+guardians have signed and the destination has not redeemed, submit it. `status()` is
+therefore not a pure read for this provider, which is a real departure from the
+simulator, and it is deliberate: §9.2 chose two calls on the ground that anything
+richer "belongs inside an implementation until a caller needs it", and this is that
+case. The engine and the reconciler are unchanged.
+
+**2. Money in flight cannot be given up on.** The simulator's `FAILED` means nothing
+moved. Here, once the source transaction lands, USDC is locked in the Token Bridge's
+custody account and **the signed VAA is the only key**. It does not expire. So a
+retry cap that ends in `FAILED_BRIDGE` is safe *before* the lock and dangerous after
+it: hitting the cap must not be read as "the money is gone", it means "nobody has
+finished this yet". The consequence for this phase is that the VAA identity is
+ledgered on every attempt, so a stalled transfer can always be completed by hand from
+the ledger alone.
+
+**3. Idempotency has to be constructed, because the protocol has none.** There is no
+`Idempotency-Key` here and no `order_ref` the protocol understands. A duplicated
+`submit` does not return the first transfer — it locks a second amount and produces a
+second VAA, and the engine retries `submit` precisely when it cannot tell whether the
+first call landed. So the adapter derives the transfer's Solana **message account
+deterministically from `order_ref`** (the funding intent id): a second attempt tries
+to create an account that already exists, fails on-chain, and the adapter reads the
+existing sequence back instead of duplicating. This is the sharpest contrast in the
+phase — the simulator gets idempotency for free from a dict keyed on `order_ref`, and
+`BridgeOrder.order_ref` was documented in phase 5 as "our idempotency key" on the
+assumption that a provider would honour it. One does not.
+
+**4. `amount_out == amount_in`, and the fee model §9.2 built is not exercised.** WTT
+charges no protocol fee, and Wormhole normalizes amounts to at most 8 decimals, which
+a 6-decimal USDC survives without truncation. The costs are gas on two chains, paid
+in SOL and BNB by us, entirely outside the transferred amount. §9.2's separate
+`amount_in` / `amount_out` remains right — a solver route *does* deduct from the
+amount, which is why the simulator can charge `SIMULATED_BRIDGE_FEE_MINOR` — but this
+route is not what proves it. Worth stating plainly rather than letting the field look
+exercised: **the real adapter's fee path is the trivial one.**
+
+**5. Finality, not the bridge, sets the clock — and it sets the reconciler's
+threshold.** `BRIDGING` here spans Solana finality (guardians will not sign sooner),
+guardian quorum, and then BSC inclusion of our redemption. The reconciler's job is to
+notice *silence*, so `RECONCILER_STUCK_AFTER_SECONDS` has to exceed that whole span
+or a healthy transfer gets treated as stuck on every pass — the §9.16 failure mode,
+arriving through a different door. The simulator's `SIMULATED_BRIDGE_LATENCY_SECONDS`
+existed to make this tunable before it was real; phase 6 is where the number has to
+match a protocol instead of a config knob.
