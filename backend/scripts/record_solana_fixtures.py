@@ -26,6 +26,14 @@ What it records, and why each one is here:
   here hammers a free endpoint to produce a fixture.
 * `error_invalid_address` — what the node says about a malformed pubkey.
 
+**One call here is not reproducible, and it cost a red suite once.**
+`signatures_for_deposit_account` asks for the newest five signatures on a real
+account, so it answers with whatever is *current* — a re-record moves it, and the
+watcher tests read specific entries out of it. Nothing can pin it: `until` and
+`before` both slide with new activity. Use `--only <name>` when adding a fixture so
+the window stays where it is, and expect to re-check `test_solana_watcher.py` if you
+ever move it deliberately.
+
 The account is chosen at record time by walking recent devnet USDC activity, and
 pinned in `RECORDED` below so a re-run reproduces the same files. Nothing is
 redacted: every byte is public chain data, and the addresses are strangers' devnet
@@ -75,6 +83,11 @@ ABSENT_SIGNATURE = "1" * 64
 #: Being a PDA it is off the ed25519 curve, so no keypair can ever sign for it.
 UNUSED_ADDRESS = "6Be1VPtVP9tcx9JN8HcPXcndEriVQofUGAwLTFZLuWxG"
 
+#: Wormhole's Token Bridge on devnet — an account that exists and is executable,
+#: recorded (with a `dataSlice`) purely for the shape of a present account. Phase
+#: 6 uses the program itself; see docs/ARCHITECTURE.md §10.1.
+TOKEN_BRIDGE_PROGRAM = "DZnkkTmCiFWfYTfT41X3Rd1kDgozqzxWaHqsw6W4x2oe"
+
 #: The public endpoint rate-limits readily, and politely spacing calls is the
 #: difference between recording fixtures and being a nuisance.
 PAUSE_SECONDS = 0.7
@@ -82,9 +95,15 @@ RATE_LIMIT_BACKOFF_SECONDS = (2.0, 5.0, 15.0)
 
 
 class Recorder:
-    def __init__(self, client: httpx.AsyncClient, *, dry_run: bool) -> None:
+    def __init__(
+        self, client: httpx.AsyncClient, *, dry_run: bool, only: frozenset[str] | None = None
+    ) -> None:
         self.client = client
         self.dry_run = dry_run
+        #: Which fixtures to write. `None` means all of them — but see `--only`:
+        #: a full re-record moves `signatures_for_deposit_account`, because that
+        #: call answers with *current* activity and no parameter can pin it.
+        self.only = only
         self.written: list[str] = []
 
     async def call(
@@ -109,6 +128,9 @@ class Recorder:
         return payload
 
     def write(self, name: str, payload: Any) -> None:
+        if self.only is not None and name not in self.only:
+            print(f"  {name}: skipped (not in --only)")
+            return
         summary = json.dumps(payload)[:90]
         print(f"  {name}: {summary}{'…' if len(summary) == 90 else ''}")
         if self.dry_run:
@@ -172,6 +194,30 @@ async def walk(rec: Recorder) -> None:
             },
         ],
     )
+
+    print("the three reads phase 6 added, for building and sending a transaction")
+    # A program account, which exists and is executable. `dataSlice` keeps the
+    # fixture small: nobody needs 300KB of BPF to test a decoder.
+    await rec.call(
+        "account_info_program",
+        "getAccountInfo",
+        [
+            TOKEN_BRIDGE_PROGRAM,
+            {
+                "encoding": "base64",
+                "commitment": "finalized",
+                "dataSlice": {"offset": 0, "length": 8},
+            },
+        ],
+    )
+    # An account nobody has created. `value: null` inside a 200 — the answer the
+    # bridge adapter reads as "nothing has been submitted for this order yet".
+    await rec.call(
+        "account_info_missing",
+        "getAccountInfo",
+        [UNUSED_ADDRESS, {"encoding": "base64", "commitment": "finalized"}],
+    )
+    await rec.call("latest_blockhash", "getLatestBlockhash", [{"commitment": "finalized"}])
 
     print("two error shapes")
     await rec.call(
@@ -271,17 +317,30 @@ async def main() -> int:
         action="store_true",
         help="find a current devnet USDC transfer to pin, instead of recording",
     )
+    parser.add_argument(
+        "--only",
+        nargs="+",
+        metavar="NAME",
+        help=(
+            "write only these fixtures. Use it to add one without moving "
+            "signatures_for_deposit_account, which is a window of live activity"
+        ),
+    )
     args = parser.parse_args()
 
     print(f"recording against {DEVNET_RPC} (read-only, no credentials)")
     async with httpx.AsyncClient(base_url=DEVNET_RPC, timeout=30.0) as client:
-        rec = Recorder(client, dry_run=args.dry_run or args.discover)
+        rec = Recorder(
+            client,
+            dry_run=args.dry_run or args.discover,
+            only=frozenset(args.only) if args.only else None,
+        )
         if args.discover:
             await discover(rec)
             return 0
         await walk(rec)
 
-    if not args.dry_run:
+    if not args.dry_run and not args.only:
         print("derived from the recording")
         derive_variants(rec)
 

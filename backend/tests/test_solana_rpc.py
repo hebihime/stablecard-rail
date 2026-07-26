@@ -248,3 +248,163 @@ async def test_a_failing_status_with_no_rpc_error_body_is_reported() -> None:
 
     with pytest.raises(SolanaRpcError, match="failed"):
         await client().get_signatures_for_address("addr")
+
+
+# The four calls phase 6 added, for building and sending a transaction rather
+# than only watching. Two of the answers are recorded; `sendTransaction` and
+# `simulateTransaction` are authored, because recording them would mean writing
+# to the chain and the fixtures README draws that line deliberately.
+
+
+@respx.mock
+async def test_an_account_that_exists_comes_back_with_its_data() -> None:
+    respx.post(RPC_URL).mock(return_value=httpx.Response(200, json=fixture("account_info_program")))
+
+    account = await client().get_account_info("DZnkkTmCiFWfYTfT41X3Rd1kDgozqzxWaHqsw6W4x2oe")
+
+    assert account is not None
+    assert account["executable"] is True
+    assert account["data"][1] == "base64"
+
+
+@respx.mock
+async def test_an_account_nobody_created_is_none_not_an_error() -> None:
+    # `value: null` inside a 200 — and the bridge adapter leans on it hardest:
+    # it means "nothing has been submitted for this order yet".
+    respx.post(RPC_URL).mock(return_value=httpx.Response(200, json=fixture("account_info_missing")))
+
+    assert await client().get_account_info("6Be1VPtVP9tcx9JN8HcPXcndEriVQofUGAwLTFZLuWxG") is None
+
+
+@respx.mock
+async def test_an_account_info_result_that_is_not_an_object_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": "gone"})
+    )
+
+    with pytest.raises(SolanaRpcError, match="not an object"):
+        await client().get_account_info("addr")
+
+
+@respx.mock
+async def test_an_account_value_that_is_not_an_account_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": "0x01"}}
+        )
+    )
+
+    with pytest.raises(SolanaRpcError, match="not an account"):
+        await client().get_account_info("addr")
+
+
+@respx.mock
+async def test_a_blockhash_is_read_out_of_the_context_envelope() -> None:
+    route = respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json=fixture("latest_blockhash"))
+    )
+
+    blockhash = await client().get_latest_blockhash()
+
+    assert blockhash == "DTdt9NMNuAaoftWPLpJNYUNqZG3Amu6Zw1NiuDsJLGUg"
+    # `finalized`, not `processed`: a blockhash from a slot that gets dropped
+    # takes the transaction with it.
+    body = json.loads(route.calls.last.request.content)
+    assert body["params"][0] == {"commitment": "finalized"}
+
+
+@respx.mock
+async def test_a_missing_blockhash_is_an_error_rather_than_an_empty_string() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"value": {}}})
+    )
+
+    with pytest.raises(SolanaRpcError, match="no blockhash"):
+        await client().get_latest_blockhash()
+
+
+@respx.mock
+async def test_a_blockhash_result_that_is_not_an_object_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": None})
+    )
+
+    with pytest.raises(SolanaRpcError, match="not an object"):
+        await client().get_latest_blockhash()
+
+
+@respx.mock
+async def test_a_transaction_is_sent_base64_encoded() -> None:
+    signature = (
+        "5Fig5NhWgYLW9eTMBqQuQiUW9uMzySFSkmK6zjjW5yqydgKLQjxSJAge8k5bfo29VCyiGkgptSBXdF2JY5H9ZYRw"
+    )
+    route = respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": signature})
+    )
+
+    assert await client().send_transaction(b"\x01\x02\x03") == signature
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["params"][0] == "AQID"
+    assert body["params"][1]["encoding"] == "base64"
+    # One retry inside the node: this service does its own, and a node that
+    # retries for a minute hides a failure.
+    assert body["params"][1]["maxRetries"] == 1
+
+
+@respx.mock
+async def test_a_send_that_answers_with_a_non_signature_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": {"ok": True}})
+    )
+
+    with pytest.raises(SolanaRpcError, match="not a signature"):
+        await client().send_transaction(b"\x01")
+
+
+@respx.mock
+async def test_a_simulation_comes_back_with_its_logs_and_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "context": {"slot": 1},
+                    "value": {
+                        "err": None,
+                        "logs": ["Program log: Sequence: 7"],
+                        "unitsConsumed": 9,
+                    },
+                },
+            },
+        )
+    )
+
+    simulated = await client().simulate_transaction(b"\x01")
+
+    assert simulated["err"] is None
+    assert simulated["logs"] == ["Program log: Sequence: 7"]
+
+
+@respx.mock
+async def test_a_simulation_with_no_value_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": 1, "result": {"context": {"slot": 1}}}
+        )
+    )
+
+    with pytest.raises(SolanaRpcError, match="no value"):
+        await client().simulate_transaction(b"\x01")
+
+
+@respx.mock
+async def test_a_simulation_result_that_is_not_an_object_is_an_error() -> None:
+    respx.post(RPC_URL).mock(
+        return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": []})
+    )
+
+    with pytest.raises(SolanaRpcError, match="not an object"):
+        await client().simulate_transaction(b"\x01")

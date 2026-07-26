@@ -18,6 +18,16 @@ What it records:
 * `vaa_not_signed_yet` — the **404** for a sequence the guardians have not signed.
   Recorded because it is the single most misreadable answer in this integration:
   it is not an error and it is not "no such transfer", it is *not yet*.
+* `transfer_native_transaction` — the Solana devnet transaction that *produced*
+  that VAA, in `json` encoding so the account indices survive. This is the
+  instruction's ABI as the chain actually accepted it: seventeen accounts in
+  order, and 55 bytes of Borsh. Everything in `accounts.py` and
+  `instructions.py` is asserted against it, which is the only way to know a
+  hand-built instruction is right without spending money to find out.
+* `posted_message_account` — the message account that transfer created, base64.
+  Its every field was matched against the VAA and the instruction: `sequence`,
+  `nonce`, `emitter_address`, `consistency_level` and `payload_len` all agree.
+  That is what makes recovering a duplicate submit's sequence safe.
 
 The VAA is pinned below so a re-run records the same one; `--discover` picks the
 newest from the same emitter and prints it to paste back. Nothing is redacted:
@@ -34,6 +44,9 @@ from typing import Any
 
 import httpx
 
+from app.chain.bridge.wormhole.config import (
+    SOLANA_DEVNET_TOKEN_BRIDGE as TOKEN_BRIDGE_PROGRAM,
+)
 from app.chain.bridge.wormhole.config import (
     WORMHOLE_CHAIN_SOLANA,
     WORMHOLE_TESTNET_API_URL,
@@ -53,6 +66,11 @@ RECORDED_SEQUENCE = 56910
 
 #: A sequence far beyond anything the emitter has produced, for the 404.
 UNSIGNED_SEQUENCE = 99_999_999
+
+#: The Solana transaction that produced `RECORDED_SEQUENCE`, and the message
+#: account it created. Both are read off the VAA record itself when re-recording,
+#: so they cannot drift apart from it.
+DEVNET_RPC = "https://api.devnet.solana.com"
 
 
 async def get(client: httpx.AsyncClient, path: str) -> tuple[int, Any]:
@@ -95,12 +113,65 @@ async def record(*, dry_run: bool) -> None:
             return
         write("vaa_token_transfer", payload, dry_run=dry_run)
 
+        signature = payload["data"]["txHash"]
+
         path = f"/api/v1/vaas/{WORMHOLE_CHAIN_SOLANA}/{EMITTER}/{UNSIGNED_SEQUENCE}"
-        status, payload = await get(client, path)
+        status, unsigned = await get(client, path)
         if status != 404:
             print(f"expected a 404 for sequence {UNSIGNED_SEQUENCE}, got {status}")
             return
-        write("vaa_not_signed_yet", payload, dry_run=dry_run)
+        write("vaa_not_signed_yet", unsigned, dry_run=dry_run)
+
+        await record_source_transaction(client, signature, dry_run=dry_run)
+
+
+async def record_source_transaction(
+    client: httpx.AsyncClient, signature: str, *, dry_run: bool
+) -> None:
+    """The devnet transaction behind the VAA, and the message account it created.
+
+    `json` encoding rather than `jsonParsed`: the parsed form drops the per-
+    instruction account *indices*, and the indices are the instruction's ABI.
+    """
+    transaction = await solana(
+        client,
+        "getTransaction",
+        [
+            signature,
+            {"encoding": "json", "maxSupportedTransactionVersion": 0, "commitment": "finalized"},
+        ],
+    )
+    result = transaction.get("result")
+    if result is None:
+        print(f"devnet no longer serves {signature[:16]}…; re-pin with --discover")
+        return
+    write("transfer_native_transaction", transaction, dry_run=dry_run)
+
+    message = _message_account(result)
+    if message is None:
+        print("could not identify the message account in that transaction")
+        return
+    account = await solana(client, "getAccountInfo", [message, {"encoding": "base64"}])
+    write("posted_message_account", account, dry_run=dry_run)
+
+
+def _message_account(result: dict[str, Any]) -> str | None:
+    """The message account is the token-bridge instruction's ninth account."""
+    message = result["transaction"]["message"]
+    keys = message["accountKeys"]
+    for instruction in message["instructions"]:
+        if keys[instruction["programIdIndex"]] != TOKEN_BRIDGE_PROGRAM:
+            continue
+        return str(keys[instruction["accounts"][8]])
+    return None
+
+
+async def solana(client: httpx.AsyncClient, method: str, params: list[Any]) -> dict[str, Any]:
+    response = await client.post(
+        DEVNET_RPC, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+    )
+    payload: dict[str, Any] = response.json()
+    return payload
 
 
 async def main() -> int:

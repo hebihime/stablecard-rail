@@ -3,7 +3,12 @@
 Two kinds of file live here, and the difference is the difference between evidence
 and a reading of documentation. Do not blur them.
 
-Regenerate with `python scripts/record_solana_fixtures.py`. **No credentials**:
+Regenerate with `python scripts/record_solana_fixtures.py` — but pass
+`--only <name>` when adding one. **`signatures_for_deposit_account` is a window of
+live activity**: it asks for the newest five signatures on a real account, so a full
+re-record moves it, and `test_solana_watcher.py` reads specific entries out of it.
+Neither `until` nor `before` can pin it, because both slide as the account is used.
+A blind re-record turned the suite red once, for exactly this reason. **No credentials**:
 Solana's devnet RPC is public and every call the script makes is read-only, which
 is why almost everything here is recorded rather than authored. **The test suite
 never calls the RPC** (SPEC.md §10) — it replays these through `respx`.
@@ -23,6 +28,9 @@ changes.**
 | `transaction_transfer_checked` | the deposit — a `transferChecked` of 1.000000 USDC, `jsonParsed`, with `createIdempotent` ahead of it because the sender paid for the recipient's account |
 | `transaction_failed` | a transaction that ran and failed: `err` is `{"InstructionError": [0, {"Custom": 1}]}` **and it still carries `postTokenBalances`** |
 | `signatures_none` | the same polling call against an address with no history |
+| `account_info_program` | an account that exists and is executable — Wormhole's devnet Token Bridge, with a `dataSlice` so the fixture is bytes rather than 300KB of BPF |
+| `account_info_missing` | `getAccountInfo` for an account nobody created: **`value: null` inside a 200**. Phase 6's bridge adapter leans on this hardest — it is how "nothing has been submitted for this order yet" is known |
+| `latest_blockhash` | the blockhash call, whose answer is wrapped in a `context` envelope rather than returned plainly |
 | `transaction_not_found` | `getTransaction` for a signature never on chain — `result: null`, *not* an error |
 | `error_invalid_address` | a malformed pubkey: `-32602 Invalid param: Invalid` |
 | `error_rate_limited` | a genuine `429 Too many requests for a specific RPC call` |

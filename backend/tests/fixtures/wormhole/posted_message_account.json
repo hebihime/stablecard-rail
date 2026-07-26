@@ -1,0 +1,21 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "context": {
+      "apiVersion": "4.2.0-beta.1",
+      "slot": 478995110
+    },
+    "value": {
+      "data": [
+        "bXNnACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2CmRqAAAAAE7eAAAAAAAAAQA7JkCfiq3tP13coYRpWqag+oKbDIXK+EhWMkiW0hTKmIUAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAO6lwAGm4hX/quBhPtof2NGGMA12sQ53BrrO1WYoPAAAAAAAQABAAAAAAAAAAAAAAAATFh/X8ITeRXGFwrZ31tYhVovH9AnFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "base64"
+      ],
+      "executable": false,
+      "lamports": 2477760,
+      "owner": "3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHHF4ssjQ5",
+      "rentEpoch": 18446744073709551615,
+      "space": 228
+    }
+  }
+}

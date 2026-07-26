@@ -19,6 +19,7 @@ rather than beliefs:
 
 from __future__ import annotations
 
+import base64
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -151,6 +152,100 @@ class SolanaRpcClient:
                 f"getTransaction returned {type(result).__name__}, not an object", status=200
             )
         return result
+
+    async def get_account_info(
+        self, address: str, *, commitment: str = "finalized"
+    ) -> dict[str, Any] | None:
+        """One account, base64-encoded, or `None` if it does not exist.
+
+        `None` is a real answer again — and here it is the one the bridge adapter
+        leans on hardest: "this transfer's message account has not been created,
+        so nothing has been submitted for it yet" (docs/ARCHITECTURE.md §10.4).
+        """
+        result = await self.call(
+            "getAccountInfo", [address, {"encoding": "base64", "commitment": commitment}]
+        )
+        if not isinstance(result, dict):
+            raise SolanaRpcError(
+                f"getAccountInfo returned {type(result).__name__}, not an object", status=200
+            )
+        value = result.get("value")
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise SolanaRpcError(
+                "getAccountInfo returned a value that is not an account", status=200
+            )
+        return value
+
+    async def get_latest_blockhash(self, *, commitment: str = "finalized") -> str:
+        """A recent blockhash, which is what makes a transaction expire.
+
+        `finalized` rather than `processed`: a blockhash from a slot that gets
+        dropped takes the transaction with it, and this service would rather wait
+        a moment than send something that silently never lands.
+        """
+        result = await self.call("getLatestBlockhash", [{"commitment": commitment}])
+        if not isinstance(result, dict):
+            raise SolanaRpcError(
+                f"getLatestBlockhash returned {type(result).__name__}, not an object", status=200
+            )
+        value = result.get("value")
+        blockhash = value.get("blockhash") if isinstance(value, dict) else None
+        if not isinstance(blockhash, str):
+            raise SolanaRpcError("getLatestBlockhash returned no blockhash", status=200)
+        return blockhash
+
+    async def send_transaction(self, signed: bytes, *, skip_preflight: bool = False) -> str:
+        """Submit a signed transaction; returns its signature.
+
+        The only write in this client, and it is safe to retry for the same reason
+        as its EVM counterpart: a signed Solana transaction *is* its signature, so
+        a duplicate is rejected as already-processed rather than executed twice.
+        That holds only while the blockhash is valid, which is why an expiry is
+        surfaced to the caller rather than retried here.
+        """
+        result = await self.call(
+            "sendTransaction",
+            [
+                base64.b64encode(signed).decode(),
+                {
+                    "encoding": "base64",
+                    "skipPreflight": skip_preflight,
+                    "preflightCommitment": "finalized",
+                    # One retry inside the node is enough; this service does its
+                    # own, and a node that retries for a minute hides a failure.
+                    "maxRetries": 1,
+                },
+            ],
+        )
+        if not isinstance(result, str):
+            raise SolanaRpcError(
+                f"sendTransaction returned {type(result).__name__}, not a signature", status=200
+            )
+        return result
+
+    async def simulate_transaction(self, signed: bytes) -> dict[str, Any]:
+        """What the node thinks would happen. Used as a pre-flight, never alone.
+
+        A simulation that fails is a reason not to spend a fee; a simulation that
+        succeeds is not a promise, because state moves underneath it.
+        """
+        result = await self.call(
+            "simulateTransaction",
+            [
+                base64.b64encode(signed).decode(),
+                {"encoding": "base64", "commitment": "finalized", "replaceRecentBlockhash": True},
+            ],
+        )
+        if not isinstance(result, dict):
+            raise SolanaRpcError(
+                f"simulateTransaction returned {type(result).__name__}, not an object", status=200
+            )
+        value = result.get("value")
+        if not isinstance(value, dict):
+            raise SolanaRpcError("simulateTransaction returned no value", status=200)
+        return value
 
     # ------------------------------------------------------------ plumbing ---
 

@@ -1,0 +1,21 @@
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "context": {
+      "apiVersion": "4.2.0-beta.1",
+      "slot": 478995421
+    },
+    "value": {
+      "data": [
+        "AgAAAGKzqUg=",
+        "base64"
+      ],
+      "executable": true,
+      "lamports": 2141440,
+      "owner": "BPFLoaderUpgradeab1e11111111111111111111111",
+      "rentEpoch": 18446744073709551615,
+      "space": 36
+    }
+  },
+  "id": 1
+}
