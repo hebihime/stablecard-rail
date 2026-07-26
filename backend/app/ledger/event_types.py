@@ -26,6 +26,18 @@ CARD_CANCELED = "card.canceled"
 # --- webhook receipt (phase 2) ---------------------------------------------
 WEBHOOK_DEAD_LETTERED = "webhook.dead_lettered"
 
+# --- what the chain watcher saw (phase 5) ----------------------------------
+# A deposit that becomes an intent is already recorded as `funding_intent.created`.
+# These two are for the money that does *not*, because "nothing happened" and "we
+# decided nothing happened" are different, and only one of them can be audited.
+#: A transfer touched a watched address and was not creditable — failed on chain,
+#: wrong mint, outgoing, or below one minor unit.
+TRANSFER_IGNORED = "chain.transfer_ignored"
+#: A creditable deposit arrived at an address no card claims. Real money, no home.
+DEPOSIT_UNROUTABLE = "chain.deposit_unroutable"
+#: A deposit already recorded — the watcher re-observed it after a restart.
+DEPOSIT_DUPLICATE = "chain.deposit_duplicate"
+
 #: Namespace for everything a provider told us, as opposed to something we did.
 PROVIDER_PREFIX = "provider"
 
@@ -46,11 +58,14 @@ __all__ = [
     "CARD_CANCELED",
     "CARD_CREATED",
     "CARD_FROZEN",
+    "DEPOSIT_DUPLICATE",
+    "DEPOSIT_UNROUTABLE",
     "INTENT_CREATED",
     "INTENT_ILLEGAL_TRANSITION",
     "INTENT_RETRIED",
     "INTENT_TRANSITIONED",
     "PROVIDER_PREFIX",
+    "TRANSFER_IGNORED",
     "WEBHOOK_DEAD_LETTERED",
     "provider_event",
 ]

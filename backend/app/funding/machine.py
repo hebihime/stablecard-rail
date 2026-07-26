@@ -45,6 +45,7 @@ __all__ = [
     "advance",
     "create_intent",
     "get_intent",
+    "intent_for_deposit",
 ]
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,21 @@ async def create_intent(
 async def get_intent(session: AsyncSession, intent_id: uuid.UUID) -> FundingIntent:
     intent = await _load(session, intent_id, for_update=False)
     return intent
+
+
+async def intent_for_deposit(session: AsyncSession, deposit_tx_ref: str) -> FundingIntent | None:
+    """The intent already opened for a chain transfer, if there is one.
+
+    The watcher re-observes deposits after any restart (docs/ARCHITECTURE.md
+    §9.5), so this is the ordinary path rather than an exceptional one: asking
+    first is cheaper than provoking a unique violation and rolling back. The
+    constraint stays the backstop for the race the question cannot close — same
+    two-layer shape as webhook dedup (§2.4).
+    """
+    result = await session.execute(
+        select(FundingIntent).where(FundingIntent.deposit_tx_ref == deposit_tx_ref)
+    )
+    return result.scalar_one_or_none()
 
 
 async def advance(

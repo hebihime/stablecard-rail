@@ -1615,3 +1615,34 @@ a fee is a card funded with money nobody has.
 
 `bridged_amount_minor` is on `MUTABLE_INTENT_FIELDS` and `amount_minor` is not — the
 deposit is history; what survived the bridge is a new fact about it.
+
+### 9.11 Coverage was under-reporting, and SQLAlchemy's greenlet is why
+
+While closing the last gap in `funding/deposits.py`, two `except IntegrityError`
+handlers reported as never executed. They were executed: replacing the body with a
+`raise AssertionError` made three tests fail. Swapping coverage's tracer core
+(`sysmon`, `pytrace`, `ctrace`) changed nothing.
+
+The cause is that **SQLAlchemy's async layer runs the sync DBAPI inside a
+greenlet**. A line executed while a greenlet is switched in is invisible to a
+tracer that is not told about greenlets, and an `IntegrityError` from an awaited
+query is raised *through* that switch — so the handler that catches it is measured
+as dead code. `concurrency = ["greenlet", "thread"]` in `[tool.coverage.run]` fixes
+it.
+
+Two things worth carrying forward:
+
+- **The design should not be shaped by a misdiagnosed tool.** Before finding the
+  real cause, the code had been contorted twice to keep the tracer happy — a
+  handler rewritten to end at its `await`, then a flag hoisted out of the block.
+  Both were reverted. What survived is the change that was right on its own terms:
+  a re-observed deposit is *expected* on every restart, so the ordinary path is now
+  a `SELECT` and the unique index is the backstop for the race — the same two
+  layers as webhook dedup (§2.4), and the reason the handler is now genuinely rare.
+- **The technique generalises.** Before believing a line is dead, make it raise. If
+  the suite stays green, it is dead; if the suite fails, the measurement is wrong.
+  That is a two-minute check that beats any amount of reading.
+
+Phases 1-4 were re-measured with the corrected setting and are still at 100%, so
+nothing was hiding behind the old numbers — but they were true by luck rather than
+by measurement, which is worth knowing.
