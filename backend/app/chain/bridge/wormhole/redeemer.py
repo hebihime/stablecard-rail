@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 
+from eth_utils.crypto import keccak
+
 from app.chain.bridge.base import BridgeError
 from app.chain.evm.abi import (
     COMPLETE_TRANSFER,
@@ -39,7 +41,12 @@ from app.chain.evm.abi import (
 from app.chain.evm.rpc import EvmRpcClient, EvmRpcError
 from app.chain.evm.signer import EvmTransaction, EvmTransactionSigner
 
-__all__ = ["GAS_LIMIT_HEADROOM", "Redeemer", "RedemptionRefused"]
+__all__ = [
+    "GAS_LIMIT_HEADROOM",
+    "OutOfGasMoney",
+    "Redeemer",
+    "RedemptionRefused",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +54,38 @@ logger = logging.getLogger(__name__)
 #: a signature check whose cost moves with the guardian set. A fifth over is
 #: cheap; running out is a failed transaction that still pays for the gas it burnt.
 GAS_LIMIT_HEADROOM = 1.2
+
+
+#: What a node says when the sender cannot pay for the gas it asked for. Not a
+#: standard code — `-32000` covers half a dozen unrelated conditions — so the text
+#: is what distinguishes it. Found by running out on BSC testnet, which is also
+#: why the message forms below are the ones observed rather than the ones guessed.
+OUT_OF_MONEY_PHRASES = ("insufficient funds", "insufficient balance")
+
+#: And what it says when the transaction is already in its pool. Both mean the
+#: send succeeded, once from this process and once from a previous attempt.
+ALREADY_SUBMITTED_PHRASES = ("already known", "nonce too low", "already exists")
+
+
+class OutOfGasMoney(BridgeError):
+    """The redeemer's own address cannot pay for the redemption.
+
+    **Retryable, and that is the whole point of the class.** It is an operational
+    condition with an operational remedy — top the address up — and the money it
+    would deliver is already locked on the source chain. Classified as permanent
+    (which `-32000` otherwise is, and was) it would mark an intent `FAILED_BRIDGE`
+    while the funds sat recoverable behind a VAA that never expires: §10.2's point
+    2, arriving through a door I had not thought of until a live run walked
+    through it.
+    """
+
+    def __init__(self, address: str, detail: str) -> None:
+        super().__init__(
+            f"the redeemer {address} cannot pay for this redemption ({detail}); "
+            f"top it up and it will be retried",
+            retryable=True,
+        )
+        self.address = address
 
 
 class RedemptionRefused(BridgeError):
@@ -149,7 +188,23 @@ class Redeemer:
             )
         )
 
-        tx_hash = await self._rpc.send_raw_transaction(signed)
+        # The hash is a property of the signed bytes, so it is knowable before the
+        # node answers — which is what lets an "already known" reply be read as the
+        # success it is rather than as a failure.
+        expected_hash = "0x" + keccak(signed).hex()
+        try:
+            tx_hash = await self._rpc.send_raw_transaction(signed)
+        except EvmRpcError as exc:
+            lowered = exc.message.lower()
+            if any(phrase in lowered for phrase in OUT_OF_MONEY_PHRASES):
+                raise OutOfGasMoney(sender, exc.message) from exc
+            if any(phrase in lowered for phrase in ALREADY_SUBMITTED_PHRASES):
+                # A previous attempt's transaction is in the pool or already mined.
+                # Same nonce, same bytes, same hash: nothing new to send.
+                logger.info("the redemption was already submitted as %s", expected_hash)
+                return expected_hash
+            raise
+
         logger.info("submitted a redemption as %s, paying gas from %s", tx_hash, sender)
         return tx_hash
 

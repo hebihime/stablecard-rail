@@ -29,6 +29,7 @@ from solders.keypair import Keypair
 from solders.pubkey import Pubkey
 
 from app.chain.bridge.base import (
+    BridgeError,
     BridgeOrder,
     BridgeRejectedError,
     BridgeStatus,
@@ -170,6 +171,10 @@ def order(order_ref: str = "intent-1", minor: int = 1_000_000) -> BridgeOrder:
     )
 
 
+async def _instantly(seconds: float) -> None:
+    """The confirmation wait, without the waiting."""
+
+
 async def message_address_for(subject_signer: TransactionSigner, order_ref: str) -> str:
     signed = await subject_signer.sign(message_seed_payload(order_ref))
     return str(message_keypair_from_signature(signed).pubkey())
@@ -255,11 +260,12 @@ async def test_the_message_account_is_the_one_the_send_used() -> None:
 
 async def test_a_message_account_that_never_appears_is_retryable_not_invented() -> None:
     # A sequence guessed here becomes a bridge_ref naming somebody else's
-    # transfer.
+    # transfer. `sleep` is injected: the real one waits half a minute, which is
+    # right in production and absurd in a test.
     solana = StubSolana()
 
-    with pytest.raises(Exception, match="not readable yet"):
-        await bridge(solana=solana).submit(order())
+    with pytest.raises(BridgeError, match="was not readable"):
+        await bridge(solana=solana, confirm_attempts=2, sleep=_instantly).submit(order())
 
 
 async def test_a_non_positive_amount_is_refused_before_anything_is_signed() -> None:
@@ -388,3 +394,78 @@ async def test_a_message_account_with_no_data_is_an_error_not_a_sequence() -> No
 
     with pytest.raises(Exception, match="without data"):
         await bridge(solana=solana).submit(order())
+
+
+# The confirmation wait, which the first live transfer forced. `sendTransaction`
+# returns when the node accepts the transaction; the message account is read at
+# `finalized`, about thirteen seconds behind. A stubbed node answers instantly, so
+# no fixture could have shown this.
+
+
+async def test_submit_waits_for_the_message_account_to_appear() -> None:
+    # Reads: one before sending (the idempotency pre-check, which finds nothing),
+    # then three polls after it, the last of which sees the account.
+    solana = SlowSolana(appears_on_call=4)
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    transfer = await WormholeBridge(
+        solana=solana,
+        guardians=StubGuardians(None),
+        redeemer=StubRedeemer(),
+        signer=signer(),
+        settings=SETTINGS,
+        mint=USDC_DEVNET_MINT,
+        confirm_delay_seconds=3.0,
+        sleep=record,
+    ).submit(order())
+
+    assert transfer.bridge_ref.endswith("/56910")
+    # Sent once, looked three times, waited between looks and not after the last.
+    assert len(solana.sent) == 1
+    assert solana.account_calls == 4
+    # Waited between looks, and not after the last one.
+    assert slept == [3.0, 3.0]
+
+
+async def test_submit_gives_up_retryably_if_it_never_appears() -> None:
+    # And the retry is safe for the same reason a duplicate submit is: the next
+    # attempt reads this same account, so it recovers rather than sending again.
+    solana = SlowSolana(appears_on_call=99)
+
+    with pytest.raises(BridgeError) as caught:
+        await WormholeBridge(
+            solana=solana,
+            guardians=StubGuardians(None),
+            redeemer=StubRedeemer(),
+            signer=signer(),
+            settings=SETTINGS,
+            mint=USDC_DEVNET_MINT,
+            confirm_attempts=4,
+            confirm_delay_seconds=3.0,
+            sleep=_instantly,
+        ).submit(order())
+
+    assert caught.value.retryable is True
+    assert "a retry will pick it up" in str(caught.value)
+    assert len(solana.sent) == 1
+    # The pre-check, then four polls that each came back empty.
+    assert solana.account_calls == 5
+
+
+class SlowSolana(StubSolana):
+    """A node whose finalized view catches up only after a few looks."""
+
+    def __init__(self, *, appears_on_call: int) -> None:
+        super().__init__()
+        self._appears_on_call = appears_on_call
+
+    async def get_account_info(
+        self, address: str, *, commitment: str = "finalized"
+    ) -> dict[str, Any] | None:
+        self.account_calls += 1
+        if self.sent and self.account_calls >= self._appears_on_call:
+            return recorded_message_account()
+        return None

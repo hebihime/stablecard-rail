@@ -39,7 +39,7 @@ from pathlib import Path
 
 from solders.pubkey import Pubkey
 
-from app.chain.bridge.base import BridgeOrder, BridgeStatus
+from app.chain.bridge.base import BridgeError, BridgeOrder, BridgeStatus
 from app.chain.bridge.build import BridgeChoice, build_bridge
 from app.chain.bridge.wormhole.accounts import (
     emitter_address,
@@ -254,13 +254,30 @@ async def live_transfer(amount_minor: int) -> int:
     print(f"  amount {order.amount}")
     print(f"  order  {order.order_ref}")
 
-    transfer = await bridge.submit(order)
+    try:
+        transfer = await bridge.submit(order)
+    except BridgeError as exc:
+        # Never a traceback here: the order reference above is idempotent, so the
+        # useful thing to say is "run it again with that reference and it resumes".
+        print(f"\n  submit failed: {exc}")
+        print(f"  retryable={exc.retryable}. The order id is the idempotency key —")
+        print("  a retry re-reads the same message account rather than sending twice.")
+        return 1
     print(f"\n  accepted as {transfer.bridge_ref}")
     print(f"  source signature {transfer.raw.get('source_signature')}")
 
     heading("waiting for the guardians, then redeeming")
     for attempt in range(1, 41):
-        current = await bridge.status(transfer.bridge_ref)
+        try:
+            current = await bridge.status(transfer.bridge_ref)
+        except BridgeError as exc:
+            # An out-of-gas redeemer lands here, and it is worth showing rather
+            # than crashing on: the transfer is intact and waiting.
+            print(f"  poll {attempt:>2}  {exc}")
+            if not exc.retryable:
+                return 1
+            await asyncio.sleep(15)
+            continue
         stage = current.raw.get("stage", "delivered")
         print(f"  poll {attempt:>2}  {current.status.value:<10} {stage}")
         if current.status is BridgeStatus.COMPLETED:

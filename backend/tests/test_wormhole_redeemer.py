@@ -22,7 +22,12 @@ import pytest
 import respx
 from eth_account import Account
 
-from app.chain.bridge.wormhole.redeemer import GAS_LIMIT_HEADROOM, Redeemer, RedemptionRefused
+from app.chain.bridge.wormhole.redeemer import (
+    GAS_LIMIT_HEADROOM,
+    OutOfGasMoney,
+    Redeemer,
+    RedemptionRefused,
+)
 from app.chain.evm.rpc import EvmRpcClient, EvmRpcError
 from app.chain.evm.signer import EvmTransaction, EvmTransactionSigner, LocalPrivateKeySigner
 from app.chain.signer import SignerError
@@ -259,6 +264,9 @@ async def test_a_node_that_cannot_be_reached_stays_retryable() -> None:
 
 @respx.mock
 async def test_a_send_that_is_rejected_is_not_dressed_up_as_a_revert() -> None:
+    # "nonce too low" used to be this test's example, and a later change gave that
+    # phrase a specific meaning (the transaction is already in the pool), so the
+    # example moved rather than the intent: a rejected send is not a revert.
     respx.post(RPC_URL).mock(
         side_effect=[
             ok("0x30d40"),
@@ -269,7 +277,7 @@ async def test_a_send_that_is_rejected_is_not_dressed_up_as_a_revert() -> None:
                 json={
                     "jsonrpc": "2.0",
                     "id": 1,
-                    "error": {"code": -32000, "message": "nonce too low"},
+                    "error": {"code": -32000, "message": "exceeds block gas limit"},
                 },
             ),
         ]
@@ -279,7 +287,7 @@ async def test_a_send_that_is_rejected_is_not_dressed_up_as_a_revert() -> None:
         await redeemer().redeem(b"\x01")
 
     assert not isinstance(caught.value, RedemptionRefused)
-    assert "nonce too low" in str(caught.value)
+    assert "exceeds block gas limit" in str(caught.value)
 
 
 # ----------------------------------------------------------------- receipts ----
@@ -314,3 +322,120 @@ def test_the_redeemer_pays_gas_from_the_signers_address() -> None:
     # And never receives anything: a Wormhole transfer credits the recipient
     # encoded in the VAA, whoever submits it.
     assert redeemer().address == LocalPrivateKeySigner.from_env_value(TEST_KEY).address
+
+
+# The two operational answers a send can give, both found by a live transfer
+# rather than by any fixture — a stubbed node never runs out of money.
+
+
+@respx.mock
+async def test_an_underfunded_redeemer_is_retryable_not_terminal() -> None:
+    # The bug this class exists for. `-32000` covers half a dozen unrelated
+    # conditions and is otherwise treated as permanent, which would mark an intent
+    # FAILED_BRIDGE while the funds sat locked behind a VAA that never expires.
+    # Estimation succeeds first, note: BSC does not check balance there, so the
+    # failure only appears at the send.
+    respx.post(RPC_URL).mock(
+        side_effect=[
+            ok("0x30d40"),
+            httpx.Response(200, json=fixture("gas_price")),
+            httpx.Response(200, json=fixture("transaction_count")),
+            httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "insufficient funds for gas * price + value: "
+                        "balance 1000000000000, tx cost 15563300000000, overshot 14563300000000",
+                    },
+                },
+            ),
+        ]
+    )
+
+    with pytest.raises(OutOfGasMoney) as caught:
+        await redeemer().redeem(b"\x01")
+
+    assert caught.value.retryable is True
+    assert caught.value.address == LocalPrivateKeySigner.from_env_value(TEST_KEY).address
+    assert "top it up" in str(caught.value)
+
+
+@respx.mock
+async def test_a_send_the_node_already_knows_is_a_success() -> None:
+    # Same nonce, same bytes, same hash — so a previous attempt's transaction is
+    # in the pool and there is nothing new to send. Reading this as a failure
+    # would make a redeemer retry forever against a node that already agreed.
+    respx.post(RPC_URL).mock(
+        side_effect=[
+            ok("0x30d40"),
+            httpx.Response(200, json=fixture("gas_price")),
+            httpx.Response(200, json=fixture("transaction_count")),
+            httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {"code": -32000, "message": "already known"},
+                },
+            ),
+        ]
+    )
+
+    tx_hash = await redeemer().redeem(b"\x01")
+
+    # The hash is a property of the signed bytes, so it is knowable without the
+    # node's answer — which is what lets this be reported as the success it is.
+    assert tx_hash.startswith("0x")
+    assert len(tx_hash) == 66
+
+
+@respx.mock
+async def test_a_nonce_too_low_is_also_already_submitted() -> None:
+    respx.post(RPC_URL).mock(
+        side_effect=[
+            ok("0x30d40"),
+            httpx.Response(200, json=fixture("gas_price")),
+            httpx.Response(200, json=fixture("transaction_count")),
+            httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {"code": -32000, "message": "nonce too low"},
+                },
+            ),
+        ]
+    )
+
+    assert (await redeemer().redeem(b"\x01")).startswith("0x")
+
+
+@respx.mock
+async def test_a_generic_minus_32000_is_still_raised_as_itself() -> None:
+    # Only the two known phrases are reinterpreted. Anything else stays an
+    # EvmRpcError, because inventing a meaning for an unfamiliar node message is
+    # how a real failure gets swallowed.
+    respx.post(RPC_URL).mock(
+        side_effect=[
+            ok("0x30d40"),
+            httpx.Response(200, json=fixture("gas_price")),
+            httpx.Response(200, json=fixture("transaction_count")),
+            httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "error": {"code": -32000, "message": "intrinsic gas too low"},
+                },
+            ),
+        ]
+    )
+
+    with pytest.raises(EvmRpcError) as caught:
+        await redeemer().redeem(b"\x01")
+
+    assert not isinstance(caught.value, OutOfGasMoney)
+    assert "intrinsic gas too low" in str(caught.value)

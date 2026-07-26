@@ -29,8 +29,10 @@ failure reason is carried rather than swallowed.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from solders.keypair import Keypair
@@ -74,9 +76,21 @@ logger = logging.getLogger(__name__)
 
 BRIDGE_ID = "wormhole"
 
+#: How long to wait for a sent transaction's message account to become readable,
+#: and how often to look. `sendTransaction` returns when the node *accepts* the
+#: transaction, and the account is read at `finalized` — roughly 32 slots behind,
+#: which is about thirteen seconds. Reading once and giving up made every healthy
+#: first submit report a failure; found by the first live transfer, not by any
+#: fixture, because a stubbed node answers instantly.
+CONFIRM_ATTEMPTS = 10
+CONFIRM_DELAY_SECONDS = 3.0
+
 #: How a `bridge_ref` is read back apart. Ours to write and ours to parse; §9.2's
 #: rule about opaque references binds every module *outside* this package.
 _REF_PARTS = 3
+
+
+Sleeper = Callable[[float], Awaitable[None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +117,9 @@ class WormholeBridge(BridgeProvider):
         mint: str,
         decimals: int = 6,
         currency: str = "USD",
+        confirm_attempts: int = CONFIRM_ATTEMPTS,
+        confirm_delay_seconds: float = CONFIRM_DELAY_SECONDS,
+        sleep: Sleeper | None = None,
     ) -> None:
         if decimals > MAX_WORMHOLE_DECIMALS:
             # Above eight, a VAA's amount is scaled and this adapter would have to
@@ -125,6 +142,9 @@ class WormholeBridge(BridgeProvider):
         self._currency = currency
         self._core = Pubkey.from_string(settings.core_program)
         self._token_bridge = Pubkey.from_string(settings.token_bridge_program)
+        self._confirm_attempts = confirm_attempts
+        self._confirm_delay = confirm_delay_seconds
+        self._sleep: Sleeper = sleep or asyncio.sleep
 
     # ------------------------------------------------------------- submit ---
 
@@ -269,16 +289,36 @@ class WormholeBridge(BridgeProvider):
         return _Submitted(sequence=posted.sequence, signature=None)
 
     async def _require_posted(self, message: Pubkey, order_ref: str) -> _Submitted:
-        submitted = await self._already_submitted(message)
-        if submitted is None:
-            # The node took the transaction and then reported no account. Not a
-            # state this should invent an answer for: a sequence guessed here
-            # becomes a `bridge_ref` that names somebody else's transfer.
-            raise BridgeError(
-                f"order {order_ref} was sent but its message account is not readable yet",
-                retryable=True,
-            )
-        return submitted
+        """Wait for the message this send created, then read its sequence.
+
+        A send returns when the node accepts the transaction; the account is read
+        at `finalized`, which trails by about thirteen seconds. So this polls
+        rather than asking once — asking once meant every healthy submit reported
+        a retryable failure, which the engine then recovered from on its next pass
+        by finding the account. Correct, but it burned a retry and read like a bug
+        in the logs, and it was: found by the first real transfer.
+
+        Deliberately `finalized` rather than `confirmed`, even though `confirmed`
+        would answer in about a second. The sequence read here *becomes* the
+        `bridge_ref`, and a confirmed block can still be dropped — while the
+        guardians will not sign before finality anyway, so waiting costs nothing
+        that was not going to be waited for.
+        """
+        for attempt in range(1, self._confirm_attempts + 1):
+            submitted = await self._already_submitted(message)
+            if submitted is not None:
+                return submitted
+            if attempt < self._confirm_attempts:
+                await self._sleep(self._confirm_delay)
+
+        # Still nothing. Retryable, and the retry is safe for the same reason the
+        # duplicate-submit path is: the next attempt reads this same account, so
+        # it recovers the sequence instead of sending again.
+        raise BridgeError(
+            f"order {order_ref} was sent but its message account was not readable within "
+            f"{self._confirm_attempts * self._confirm_delay:.0f}s; a retry will pick it up",
+            retryable=True,
+        )
 
     def _transfer(
         self,
