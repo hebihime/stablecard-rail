@@ -19,6 +19,7 @@ __all__ = [
     "ASSOCIATED_TOKEN_PROGRAM_ID",
     "TOKEN_PROGRAM_ID",
     "associated_token_address",
+    "base58_to_bytes32",
 ]
 
 #: The SPL Token program, and the program that derives accounts for it. Constants
@@ -41,3 +42,14 @@ def associated_token_address(owner: Pubkey, mint: Pubkey) -> Pubkey:
         ASSOCIATED_TOKEN_PROGRAM_ID,
     )
     return address
+
+
+def base58_to_bytes32(address: str) -> bytes:
+    """A Solana address as the 32 raw bytes another chain refers to it by.
+
+    Wormhole addresses every chain in 32 bytes, which a Solana pubkey already is —
+    so this is a decoding, not a hash, and it round-trips. It exists because a
+    contract on an EVM chain has never heard of base58: `wrappedAsset(1, mint)`
+    takes the mint as `bytes32` (docs/ARCHITECTURE.md §10.1).
+    """
+    return bytes(Pubkey.from_string(address))

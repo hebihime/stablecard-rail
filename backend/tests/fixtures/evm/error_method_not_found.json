@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": -32601,
+    "message": "The method eth_nonsense does not exist/is not available"
+  },
+  "id": 1,
+  "jsonrpc": "2.0"
+}

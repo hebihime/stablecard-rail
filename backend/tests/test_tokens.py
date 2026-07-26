@@ -21,6 +21,7 @@ from app.chain.tokens import (
     ASSOCIATED_TOKEN_PROGRAM_ID,
     TOKEN_PROGRAM_ID,
     associated_token_address,
+    base58_to_bytes32,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "solana"
@@ -93,3 +94,15 @@ def test_the_program_ids_are_the_ones_the_recorded_transaction_names() -> None:
 
     assert str(TOKEN_PROGRAM_ID) in keys
     assert str(ASSOCIATED_TOKEN_PROGRAM_ID) in keys
+
+
+def test_a_solana_address_is_already_the_32_bytes_another_chain_names_it_by() -> None:
+    # A decoding, not a hash: Wormhole addresses every chain in 32 bytes and a
+    # Solana pubkey is exactly that, which is why this round-trips. The evidence
+    # is that the *EVM* side answered a real `wrappedAsset` call made with these
+    # bytes (tests/fixtures/evm/call_wrapped_asset.json).
+    raw = base58_to_bytes32(USDC_DEVNET_MINT)
+
+    assert len(raw) == 32
+    assert raw.hex() == "3b442cb3912157f13a933d0134282d032b5ffecd01a2dbf1b7790608df002ea7"
+    assert str(Pubkey.from_bytes(raw)) == USDC_DEVNET_MINT
