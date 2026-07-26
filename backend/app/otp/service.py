@@ -41,6 +41,7 @@ from app.core.time import utcnow
 from app.issuers.base import CardEvent, CardEventType
 from app.ledger import event_types
 from app.ledger.writer import find_by_idempotency_key, record
+from app.otp.push import publish_challenge
 from app.otp.store import OtpChallenge, OtpStore, Remembered
 from app.webhooks.dispatch import Handler, subscribe
 
@@ -127,16 +128,21 @@ def _challenge_from(event: CardEvent, *, now: datetime) -> OtpChallenge:
 
 
 async def deliver_challenge(
-    session: AsyncSession, store: OtpStore, event: CardEvent, *, now: datetime
+    session: AsyncSession, redis: Redis, event: CardEvent, *, now: datetime
 ) -> OtpDelivery:
-    """Store the code for one challenge and ledger that we did. Commits.
+    """Store the code for one challenge, ledger that we did, and push it. Commits.
+
+    Takes the Redis client rather than a store, for the same reason
+    `webhooks/receiver.receive` does: this owns two things in Redis — the stored
+    code and the push channel — and handing it one of them and not the other would
+    only move the second construction to the caller.
 
     Raises whatever the store or the ledger raises: a challenge we failed to store
     is one the cardholder cannot answer, so it belongs on the handler-failure path
     — retried with backoff, then dead-lettered — rather than being swallowed.
     """
     challenge = _challenge_from(event, now=now)
-    outcome = await store.remember(challenge, now=now)
+    outcome = await OtpStore(redis).remember(challenge, now=now)
 
     if outcome is Remembered.EXPIRED:
         # Nothing can be done for the cardholder. Recorded rather than logged,
@@ -155,6 +161,10 @@ async def deliver_challenge(
             challenge.expires_at.isoformat(),
             "minted by us" if challenge.derived else "sent by the provider",
         )
+        # Only on the first store, and after the durable work: a push is a
+        # notification about a code that already exists. Pushing on
+        # ALREADY_KNOWN would re-announce a challenge the app is already showing.
+        await publish_challenge(redis, challenge)
     return OtpDelivery(outcome=outcome, challenge=challenge)
 
 
@@ -219,11 +229,10 @@ def make_challenge_handler(sessionmaker: async_sessionmaker[AsyncSession], redis
     the database and this package — so the consumer opens its own session per
     event, exactly as funding's settlement consumer does.
     """
-    store = OtpStore(redis)
 
     async def handle(event: CardEvent) -> None:
         async with sessionmaker() as session:
-            await deliver_challenge(session, store, event, now=utcnow())
+            await deliver_challenge(session, redis, event, now=utcnow())
 
     return handle
 

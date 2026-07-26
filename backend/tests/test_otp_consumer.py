@@ -29,6 +29,7 @@ from app.core.time import utcnow
 from app.issuers.base import CardEvent, CardEventType
 from app.ledger import event_types
 from app.main import create_app
+from app.otp.push import subscription
 from app.otp.service import (
     HANDLER_NAME,
     deliver_challenge,
@@ -69,9 +70,9 @@ def store(redis_client: Redis) -> OtpStore:
 
 
 async def test_a_code_the_provider_sent_is_the_code_we_store(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
-    delivery = await deliver_challenge(session, store, challenge_event(), now=NOW)
+    delivery = await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
 
     assert Remembered.STORED is delivery.outcome
     assert CODE == delivery.challenge.code
@@ -82,25 +83,27 @@ async def test_a_code_the_provider_sent_is_the_code_we_store(
 
 
 async def test_a_provider_that_sends_no_code_gets_one_minted(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     # Lithic's flow: "your organization delivers the challenge to the cardholder
     # through your chosen channel". There is no code to extract because the card
     # program is the party that makes one.
-    delivery = await deliver_challenge(session, store, challenge_event(otp_code=None), now=NOW)
+    delivery = await deliver_challenge(
+        session, redis_client, challenge_event(otp_code=None), now=NOW
+    )
 
     assert delivery.challenge.derived is True
     assert 6 == len(delivery.challenge.code)
     assert delivery.challenge.code.isdigit()
 
 
-async def test_minted_codes_are_not_predictable(session: AsyncSession, store: OtpStore) -> None:
+async def test_minted_codes_are_not_predictable(session: AsyncSession, redis_client: Redis) -> None:
     # A guessable code is not a second factor. `secrets`, not `random`.
     codes = set()
     for index in range(20):
         delivery = await deliver_challenge(
             session,
-            store,
+            redis_client,
             challenge_event(otp_code=None, challenge_id=f"3ds_{index}", event_id=f"evt-{index}"),
             now=NOW,
         )
@@ -113,41 +116,47 @@ async def test_minted_codes_are_not_predictable(session: AsyncSession, store: Ot
 
 
 async def test_the_challenge_expires_when_the_provider_says(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
-    delivery = await deliver_challenge(session, store, challenge_event(), now=NOW)
+    delivery = await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
 
     assert NOW + timedelta(minutes=5) == delivery.challenge.expires_at
 
 
 async def test_a_challenge_the_provider_did_not_date_gets_the_configured_ttl(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     delivery = await deliver_challenge(
-        session, store, challenge_event(challenge_expires_at=None), now=NOW
+        session, redis_client, challenge_event(challenge_expires_at=None), now=NOW
     )
 
     assert NOW + timedelta(seconds=300) == delivery.challenge.expires_at
 
 
-async def test_an_absurd_deadline_is_capped(session: AsyncSession, store: OtpStore) -> None:
+async def test_an_absurd_deadline_is_capped(session: AsyncSession, redis_client: Redis) -> None:
     # A backstop, not a policy about challenge length: a payload claiming the
     # challenge lives for a week would otherwise keep a secret in Redis for a week.
     delivery = await deliver_challenge(
-        session, store, challenge_event(challenge_expires_at=NOW + timedelta(days=7)), now=NOW
+        session,
+        redis_client,
+        challenge_event(challenge_expires_at=NOW + timedelta(days=7)),
+        now=NOW,
     )
 
     assert NOW + timedelta(seconds=900) == delivery.challenge.expires_at
 
 
 async def test_a_challenge_that_arrives_dead_is_recorded_rather_than_served(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     # A retry drained long after the fact, or a provider clock well behind ours.
     # Nothing can be done for the cardholder, and the ledger is where "a challenge
     # arrived and we could not serve it" has to be visible.
     delivery = await deliver_challenge(
-        session, store, challenge_event(challenge_expires_at=NOW - timedelta(seconds=1)), now=NOW
+        session,
+        redis_client,
+        challenge_event(challenge_expires_at=NOW - timedelta(seconds=1)),
+        now=NOW,
     )
 
     assert Remembered.EXPIRED is delivery.outcome
@@ -161,24 +170,67 @@ async def test_a_challenge_that_arrives_dead_is_recorded_rather_than_served(
 
 
 async def test_a_challenge_with_no_id_of_its_own_is_keyed_on_the_delivery(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     # SPEC.md §6.2 keys on "card + challenge id". A provider that sends no
     # challenge id still sends an event id, which is unique and already the basis
     # of webhook dedup — so it is the honest fallback rather than a generated one.
-    delivery = await deliver_challenge(session, store, challenge_event(challenge_id=None), now=NOW)
+    delivery = await deliver_challenge(
+        session, redis_client, challenge_event(challenge_id=None), now=NOW
+    )
 
     assert "evt-1" == delivery.challenge.challenge_id
     assert await store.get("gnosis_pay_mock", "evt-1") is not None
+
+
+# ------------------------------------------------------------------- push ----
+
+
+async def test_a_stored_challenge_is_pushed_to_whoever_is_listening(
+    session: AsyncSession, redis_client: Redis
+) -> None:
+    async with subscription(redis_client, card_id="card_1") as pubsub:
+        await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
+
+        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
+    assert message is not None
+    assert "3ds_000001" == OtpChallenge.model_validate_json(message["data"]).challenge_id
+
+
+async def test_a_retry_does_not_re_announce_a_challenge_the_app_is_showing(
+    session: AsyncSession, redis_client: Redis
+) -> None:
+    # The push is a notification that a code has appeared. A second handler run
+    # produces no new code, so it produces no notification either.
+    await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
+
+    async with subscription(redis_client, card_id="card_1") as pubsub:
+        await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
+
+        assert await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.2) is None
+
+
+async def test_a_challenge_that_arrived_dead_is_not_pushed(
+    session: AsyncSession, redis_client: Redis
+) -> None:
+    async with subscription(redis_client, card_id="card_1") as pubsub:
+        await deliver_challenge(
+            session,
+            redis_client,
+            challenge_event(challenge_expires_at=NOW - timedelta(seconds=1)),
+            now=NOW,
+        )
+
+        assert await pubsub.get_message(ignore_subscribe_messages=True, timeout=0.2) is None
 
 
 # ----------------------------------------------------------------- ledger ----
 
 
 async def test_a_delivered_challenge_is_ledgered_without_its_code(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
-    await deliver_challenge(session, store, challenge_event(), now=NOW)
+    await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
 
     entries = await all_ledger_events(session)
     assert [event_types.OTP_DELIVERED] == [entry.event_type for entry in entries]
@@ -192,13 +244,13 @@ async def test_a_delivered_challenge_is_ledgered_without_its_code(
 
 
 async def test_a_challenge_with_no_amount_is_still_delivered(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     # Lithic's challenge is one: they state the amount as a decimal plus a currency
     # exponent, which their adapter deliberately leaves unnormalized. A challenge
     # is about authenticating a cardholder, not about a figure, so the absence must
     # not stop the code reaching them.
-    delivery = await deliver_challenge(session, store, challenge_event(amount=None), now=NOW)
+    delivery = await deliver_challenge(session, redis_client, challenge_event(amount=None), now=NOW)
 
     assert Remembered.STORED is delivery.outcome
     entries = await all_ledger_events(session)
@@ -207,7 +259,7 @@ async def test_a_challenge_with_no_amount_is_still_delivered(
 
 
 async def test_a_retried_handler_keeps_the_first_code_and_ledgers_once(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     """The idempotency test, and the reason the ledger write is attempted twice.
 
@@ -217,8 +269,10 @@ async def test_a_retried_handler_keeps_the_first_code_and_ledgers_once(
     already stored re-attempts the row rather than assuming the first run wrote it:
     the first run may have died between the two.
     """
-    first = await deliver_challenge(session, store, challenge_event(), now=NOW)
-    second = await deliver_challenge(session, store, challenge_event(otp_code="000000"), now=NOW)
+    first = await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
+    second = await deliver_challenge(
+        session, redis_client, challenge_event(otp_code="000000"), now=NOW
+    )
 
     assert Remembered.STORED is first.outcome
     assert Remembered.ALREADY_KNOWN is second.outcome
@@ -229,7 +283,7 @@ async def test_a_retried_handler_keeps_the_first_code_and_ledgers_once(
 
 
 async def test_a_run_that_died_before_ledgering_still_ledgers_on_retry(
-    session: AsyncSession, store: OtpStore
+    session: AsyncSession, redis_client: Redis, store: OtpStore
 ) -> None:
     # The crash window the test above describes, arranged directly: the code landed
     # in Redis and the process died before the ledger row. A retry must produce the
@@ -248,7 +302,7 @@ async def test_a_run_that_died_before_ledgering_still_ledgers_on_retry(
     )
     assert [] == await all_ledger_events(session)
 
-    delivery = await deliver_challenge(session, store, challenge_event(), now=NOW)
+    delivery = await deliver_challenge(session, redis_client, challenge_event(), now=NOW)
 
     assert Remembered.ALREADY_KNOWN is delivery.outcome
     assert [event_types.OTP_DELIVERED] == [

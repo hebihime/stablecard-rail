@@ -51,6 +51,29 @@ class SeedIntent(Protocol):
     ) -> FundingIntent: ...
 
 
+def routed_paths(node: object) -> set[str]:
+    """Every path the app serves, WebSockets included.
+
+    Recursive, and it follows `original_router`, because Starlette 1.3 wraps an
+    included router in an `_IncludedRouter` that exposes neither `path` nor
+    `routes` — so the obvious `{route.path for route in app.routes}` reports only
+    the four docs endpoints and would make "is this route wired up?" pass
+    vacuously. `app.openapi()` is not an alternative: WebSocket routes are absent
+    from an OpenAPI schema by definition, and the socket is the thing being checked.
+    """
+    routes = getattr(node, "routes", None)
+    if not routes:
+        included = getattr(node, "original_router", None)
+        routes = getattr(included, "routes", []) if included is not None else []
+    found: set[str] = set()
+    for route in routes:
+        path = getattr(route, "path", None)
+        if isinstance(path, str):
+            found.add(path)
+        found |= routed_paths(route)
+    return found
+
+
 async def ledger_for_intent(session: AsyncSession, intent_id: uuid.UUID) -> list[LedgerEvent]:
     result = await session.execute(
         select(LedgerEvent).where(LedgerEvent.intent_id == intent_id).order_by(LedgerEvent.id)

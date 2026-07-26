@@ -18,18 +18,22 @@ docs/ARCHITECTURE.md §11.6.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from app.core.redis import get_redis
 from app.core.time import utcnow
+from app.otp.push import listen
 from app.otp.store import OtpChallenge, OtpStore
 
 router = APIRouter(tags=["otp"])
+
+logger = logging.getLogger(__name__)
 
 RedisClient = Annotated[Redis, Depends(get_redis)]
 
@@ -88,3 +92,46 @@ async def list_pending_challenges(
     pending = await store.pending(now=now, card_id=card_id, limit=limit)
     challenges = [PendingChallengeOut.of(challenge, now=now) for challenge in pending]
     return PendingChallenges(count=len(challenges), challenges=challenges)
+
+
+@router.websocket("/ws/otp")
+async def push_challenges(
+    websocket: WebSocket,
+    redis: RedisClient,
+    card_id: Annotated[str | None, Query(description="Filter by provider card id")] = None,
+) -> None:
+    """The push half of SPEC.md §6.3. Sends exactly what the poll endpoint returns.
+
+    One message per challenge, in the same shape `GET /otp/pending` lists — so a
+    client handles a pushed challenge and a polled one with the same code, and
+    deduplicates on `challenge_id` without caring which arrived first.
+
+    **What is already open is sent on connect.** A socket opened a second after the
+    webhook landed would otherwise show nothing until the *next* challenge, and the
+    cardholder is looking at a payment they need to confirm now. It also makes the
+    two paths interchangeable rather than merely complementary: a client can connect,
+    read the snapshot, and never poll.
+
+    Nothing is read from the socket. Approve/decline is an HTTP call
+    (`POST /otp/{challenge_id}/respond`) because it has to be answerable by a client
+    whose socket has dropped — which is the same reason polling is the contract.
+    """
+    await websocket.accept()
+    store = OtpStore(redis)
+    try:
+        now = utcnow()
+        for challenge in await store.pending(now=now, card_id=card_id):
+            await websocket.send_json(
+                PendingChallengeOut.of(challenge, now=now).model_dump(mode="json")
+            )
+        # `listen` never completes — it ends by raising out of `send_json` when the
+        # client goes away — so the loop has no normal exit for coverage to see.
+        async for pushed in listen(redis, card_id=card_id):  # pragma: no branch
+            await websocket.send_json(
+                PendingChallengeOut.of(pushed, now=utcnow()).model_dump(mode="json")
+            )
+    except WebSocketDisconnect:
+        # The client went away. Normal: an app backgrounded, a reload, a network
+        # blip — and it costs nothing, because the challenge is still in the store
+        # for the next poll or the next connect.
+        logger.debug("OTP push client disconnected (card_id=%s)", card_id)
