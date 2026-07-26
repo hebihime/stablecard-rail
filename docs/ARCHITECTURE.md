@@ -1646,3 +1646,45 @@ Two things worth carrying forward:
 Phases 1-4 were re-measured with the corrected setting and are still at 100%, so
 nothing was hiding behind the old numbers — but they were true by luck rather than
 by measurement, which is worth knowing.
+
+### 9.12 `SETTLED` needs a reference no provider currently sends
+
+The settlement consumer is the first subscriber on the `EventBus` — phase 2 built
+the pipe and left the subscriptions to the phases that own them (§3.10), and this is
+funding's. It attributes a settlement to an intent on `CardEvent.funding_ref`, the
+field that exists for exactly that, **and on nothing else.**
+
+That is a refusal, and it overrules a note phase 4 left in the mock adapter:
+
+> Their transactions carry no reference to our funding intent: money arrives
+> on-chain, so a settlement cannot echo a `funding_ref`. Phase 5 reconciles on the
+> card and the amount instead.
+
+Phase 5 does not, because at all three providers `SETTLEMENT` is overwhelmingly a
+**purchase clearing**, not a funding landing. Reconciling on card and amount would
+let a $25 coffee settle a $25 top-up. That is a false reconciliation: silent, wrong,
+and worse than the alternative, which is that the intent stays at `FUNDED` — where
+it is accurate, because the provider said the card has the money.
+
+So `FUNDED` is where intents rest at these three providers, and that is a fact about
+what the providers send rather than a gap in the machine:
+
+| Provider | Why no attributable settlement |
+| --- | --- |
+| `gnosis_pay_mock` | funding *is* an on-chain deposit, and the chain has never heard of our intent id |
+| `lithic` | funding is a spending-limit raise; there is no settlement event for one |
+| `stripe_issuing` | same, and its settlements are `issuing_transaction.created` for spend |
+
+**What would make it reachable**, in order of how much each is worth: a provider that
+echoes `request.idempotency_key` on the settlement of a funding (Stripe already
+returns ours on *card* events, so this is closer than it looks); a book-transfer
+funding at a ledger-enabled Lithic program (§4.4), where the transfer has an id and
+a completion event; or a reconciler that queries the provider and settles on
+evidence rather than on a webhook. The first two are provider capabilities we do not
+have; the third is a real option and is deliberately not taken here, because
+"reconciled" should mean the provider told us so.
+
+Failure handling is the phase-2 path unchanged: a settlement naming an intent that
+is *not* `FUNDED` is an illegal transition — ledgered, then retried and
+dead-lettered (§3.7). It means the provider believes a funding completed that we do
+not, which is exactly the kind of thing that should end up in front of a person.
