@@ -4,9 +4,10 @@
     python scripts/demo_phase6.py --transfer   # actually move devnet USDC (spends)
 
 **The default mode reads two chains and needs no credentials.** It asks Solana
-devnet and BSC testnet the six questions that decide whether this route exists at
-all, and prints what each answered — which is how the route was chosen in the first
-place (docs/ARCHITECTURE.md §10.1). If Wormhole ever retires the devnet
+devnet and whichever EVM testnet `EVM_*` names — BSC testnet by default — the six
+questions that decide whether this route exists at all, and prints what each
+answered, which is how the route was chosen in the first place
+(docs/ARCHITECTURE.md §10.1). If Wormhole ever retires the devnet
 deployment, this is the script that says so, in one screen, instead of a transfer
 failing somewhere less obvious.
 
@@ -67,6 +68,12 @@ BRIDGE_CONTRACTS = "bridgeContracts(uint16)"
 #: `getCurrentGuardianSetIndex()` on the destination core bridge. It has to match
 #: the set the guardians are signing with, or a fresh VAA cannot be verified.
 GUARDIAN_SET_INDEX = "getCurrentGuardianSetIndex()"
+
+#: `wormhole()` on a Token Bridge — the core bridge it verifies VAAs with. Asked
+#: rather than configured, so this script follows `EVM_*` to whatever chain it is
+#: pointed at. An earlier version hard-coded BSC testnet's, which would have read
+#: an address with no code on any other chain and crashed on the empty answer.
+CORE_BRIDGE_OF = "wormhole()"
 
 TICK = "✓"
 CROSS = "✗"
@@ -139,24 +146,15 @@ async def verify_route() -> bool:
     all_good &= attested
     line(attested, "wrapped USDC attested", wrapped if attested else "none — needs create_wrapped")
 
-    guardian_word = await destination.call_contract(
-        to=_core_contract(wormhole.destination_token_bridge),
-        data=selector(GUARDIAN_SET_INDEX),
+    core = decode_address(
+        await destination.call_contract(
+            to=wormhole.destination_token_bridge, data=selector(CORE_BRIDGE_OF)
+        )
     )
-    print(f"    destination guardian set: {int(guardian_word, 16)}")
+    guardian_word = await destination.call_contract(to=core, data=selector(GUARDIAN_SET_INDEX))
+    print(f"    core bridge {core}, guardian set {int(guardian_word, 16)}")
 
     return bool(all_good)
-
-
-def _core_contract(token_bridge: str) -> str:
-    """The core bridge beside a Token Bridge deployment.
-
-    Hard-coded for BSC testnet rather than read off the Token Bridge, because
-    `wormhole()` returns it and one more call to prove a constant is not worth the
-    round trip in a demo. If this ever disagrees with the node, the guardian-set
-    line is what looks wrong.
-    """
-    return "0x68605AD7b15c732a30b1BbC62BE8F2A509D74b4D"
 
 
 def replay_vaa() -> None:

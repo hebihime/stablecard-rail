@@ -1897,6 +1897,26 @@ out from the chain rather than from a table it may have read wrongly again.
 to prove the mechanics, and document the mainnet route choice"). Fees and delivery
 mechanics are in §10.2.
 
+**Two other destinations are equally open, and the same script proves it.** The
+destination is four environment variables and no code, which was the point of
+splitting `EVM_` from `WORMHOLE_` (§10.1's configuration note), and
+`scripts/demo_phase6.py` follows them — it reads the core bridge off the Token
+Bridge with `wormhole()` rather than holding a constant, so pointing it elsewhere
+verifies elsewhere:
+
+| Destination | Wormhole id | Trusts Solana's emitter | Wrapped devnet USDC |
+| --- | --- | --- | --- |
+| BSC testnet (default) | 4 | yes | `0x51a3cc54…ac08` |
+| Sepolia | 10002 | yes | `0x9278e9d9…9147` |
+| Base Sepolia | 10004 | yes | `0xc2f6ef37…8d0e` |
+
+Worth knowing which one *other people* use, because it is better liveness evidence
+than a contract read: of 25 recent VAAs from the Solana devnet Token Bridge, 13
+targeted Base Sepolia and 6 targeted Sepolia, and **none targeted BSC testnet**. The
+BSC route is open — every check passes — but ours would be the traffic on it. If a
+live transfer ever fails in a way that looks like the destination's problem rather
+than ours, moving to 10004 for a comparison is four variables and a re-run.
+
 **The mainnet route choice, and a §5.2 assumption that has expired.** §5.2 predicts
 the real product bridges Solana → Gnosis Chain because that is where a Gnosis Pay
 card's Safe lives, and offers deBridge and LiFi as the candidates. Neither serves it
