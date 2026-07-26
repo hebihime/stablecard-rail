@@ -38,6 +38,15 @@ DEPOSIT_UNROUTABLE = "chain.deposit_unroutable"
 #: A deposit already recorded — the watcher re-observed it after a restart.
 DEPOSIT_DUPLICATE = "chain.deposit_duplicate"
 
+# --- the 3DS / OTP service (phase 7) ---------------------------------------
+#: A challenge became a code the app can show. The provider's delivery is already
+#: ledgered as `provider.three_ds_challenge`; this is the record of what *we* then
+#: did about it, and it never carries the code (docs/ARCHITECTURE.md §11.2).
+OTP_DELIVERED = "otp.delivered"
+#: A challenge arrived that could not be served — expired on arrival, so far. The
+#: cardholder cannot complete the payment and only the ledger would ever say why.
+OTP_UNDELIVERABLE = "otp.undeliverable"
+
 #: Namespace for everything a provider told us, as opposed to something we did.
 PROVIDER_PREFIX = "provider"
 
@@ -64,6 +73,8 @@ __all__ = [
     "INTENT_ILLEGAL_TRANSITION",
     "INTENT_RETRIED",
     "INTENT_TRANSITIONED",
+    "OTP_DELIVERED",
+    "OTP_UNDELIVERABLE",
     "PROVIDER_PREFIX",
     "TRANSFER_IGNORED",
     "WEBHOOK_DEAD_LETTERED",

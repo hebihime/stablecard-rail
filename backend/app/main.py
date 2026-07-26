@@ -1,11 +1,18 @@
 """FastAPI application factory.
 
 Routers land with their phases (SPEC.md §12). Phase 1 brought the ledger read
-surface and a health probe; phase 2 adds card lifecycle and webhook receipt. The
-OTP surface (§6) arrives in phase 7. Phase 5 adds no route — its work is driven by
-the chain and by webhooks, not by callers — but it does connect the settlement
-consumer here, because `webhooks/dispatch` holds subscriptions process-wide and
-registers none of its own.
+surface and a health probe; phase 2 adds card lifecycle and webhook receipt; phase
+7 adds the OTP surface (§6). Phase 5 adds no route — its work is driven by the
+chain and by webhooks, not by callers — but it does connect the settlement consumer
+here, because `webhooks/dispatch` holds subscriptions process-wide and registers
+none of its own.
+
+Both consumers are subscribed here rather than at import, and the OTP one takes the
+process-wide Redis client: `Handler` receives only the event, so a consumer that
+needs infrastructure has to be given it when it is registered. In the suite that
+means a test which drives a challenge over HTTP re-subscribes with its own client —
+`redis.asyncio` connections belong to the event loop that opened them, and the suite
+gives each test a loop of its own.
 
 Importing `app.issuers` is what registers the adapters — see that package's
 docstring. It is imported for effect here so the registry is populated before the
@@ -30,8 +37,9 @@ from app.api.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.db import get_session, get_sessionmaker
 from app.core.logging import configure_logging
-from app.core.redis import get_redis
+from app.core.redis import get_redis, get_redis_client
 from app.funding.settlement import subscribe_settlement
+from app.otp.service import subscribe_challenges
 
 health_router = APIRouter(tags=["ops"])
 
@@ -66,6 +74,10 @@ def create_app() -> FastAPI:
     # where the funding side is connected: without it a settlement is verified,
     # deduped, ledgered and published — and then handled by nobody.
     subscribe_settlement(get_sessionmaker())
+    # Phase 7's, for the same reason. A 3DS challenge that nobody consumes is a
+    # cardholder staring at a payment they cannot complete, and — unlike a missed
+    # settlement — nothing later reconciles it: the challenge simply expires.
+    subscribe_challenges(get_sessionmaker(), get_redis_client())
     install_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(cards_router)

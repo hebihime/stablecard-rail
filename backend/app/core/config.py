@@ -68,6 +68,20 @@ class Settings(BaseSettings):
     #: Intents examined per pass.
     reconciler_batch_limit: int = 50
 
+    # --- the 3DS / OTP service (SPEC.md §6) --------------------------------
+    #: How long a challenge is remembered when the provider does not date one.
+    #: Only a fallback: an expiry the provider *does* send always wins, because a
+    #: code that outlives its challenge is one the cardholder can enter and be
+    #: declined for (docs/ARCHITECTURE.md §11.3).
+    otp_ttl_seconds: int = 300
+    #: And the ceiling, whatever the provider says. A backstop against a payload
+    #: claiming a challenge lives for a week, not a policy about challenge length —
+    #: set it above any real provider's deadline (Lithic's are ~10 minutes).
+    otp_max_ttl_seconds: int = 900
+    #: Digits in a code we mint ourselves. Six is what every 3DS SMS-OTP flow uses,
+    #: so it is what a cardholder expects to be asked for.
+    otp_code_digits: int = 6
+
     # --- the worker loop ---------------------------------------------------
     #: How long a hop is left alone before its *first* attempt. Retries are the
     #: reconciler's business and are paced by its backoff instead.

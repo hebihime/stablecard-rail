@@ -50,12 +50,15 @@ async def run(redis: Redis, event: CardEvent) -> dispatch.DispatchReport:
 def test_starting_the_app_registers_exactly_the_consumers_that_exist() -> None:
     # Phase 2 built the pipe and no consumers, and this test asserted an empty
     # tuple on the stated grounds that "the funding engine subscribes in phase 5
-    # and the OTP service in phase 7". Phase 5 has arrived, so the guard now
-    # names it — and still fails if a consumer is wired ahead of its phase, which
-    # is what it was for. The OTP service (§6) belongs to phase 7.
+    # and the OTP service in phase 7". Both have arrived, so the guard names both —
+    # and still fails if a consumer is wired ahead of its phase, or if one is
+    # written and then never registered, which is what it is for.
     create_app()
 
-    assert dispatch.subscriptions() == ((CardEventType.SETTLEMENT, "funding.settle"),)
+    assert dispatch.subscriptions() == (
+        (CardEventType.SETTLEMENT, "funding.settle"),
+        (CardEventType.THREE_DS_CHALLENGE, "otp.deliver"),
+    )
 
 
 def test_a_handler_is_registered_against_one_event_type() -> None:
