@@ -1730,3 +1730,59 @@ ones. The exponential part of the eligibility test is applied in Python rather t
 in SQL, because `POWER(2, retry_count)` in a predicate is not something an index can
 serve — and what it filters out is a handful of recently-retried rows, not a table
 scan.
+
+### 9.14 `solders` only, and what the signer interface deliberately cannot do
+
+SPEC.md §2 names "`solders` / `solana-py`". Only `solders` is installed, and only
+for the things a wire format cannot do: keys, signatures, and program-derived
+addresses. The RPC surface this phase needs is **two methods** —
+`getSignaturesForAddress` and `getTransaction` — over the `httpx` that was already
+here, and writing them is what makes the watcher testable by replaying recorded
+responses through `respx`, exactly as the issuer contract tests replay theirs
+(§4.3's reasoning about vendor SDKs, applied again).
+
+**The signer interface is a public key and a signature over bytes**, and nothing
+else. It cannot build a transaction, fetch a blockhash, or submit one — because
+phase 9's `FireblocksSigner` is an HTTP call to a custody service with a policy
+engine and an approval flow behind it, and a custody service signs a payload
+without an opinion about what the payload was for. An interface that took a
+`Transaction` object could not be implemented by something that has never heard of
+`solders`, which would make the "swap in Fireblocks" claim (SPEC.md §8) false in
+the only way that matters.
+
+So what does the signer *do* in phase 5, with no transaction to sign? **It owns the
+deposit address.** A wallet address does not hold USDC; the associated token account
+it derives to does, and that derived address is the "Solana devnet deposit address"
+the fund screen shows (SPEC.md §9.3) and the watcher polls (§9.8's *source*
+address). `app/chain/tokens.py` derives it, and the test for that derivation is
+pinned to evidence rather than to itself: the recorded devnet transfer names both
+the token account it credited *and* the wallet owning it, so the derivation has to
+reproduce what the chain already did.
+
+Submitting a transfer arrives with the thing that owns the money — the in-app
+wallet in phase 8. The demo does not send one, and says so.
+
+### 9.15 What the phase-5 demo runs on
+
+`scripts/demo_phase5.py` has two modes, and the default needs **no network and no
+credentials**: it replays the recorded devnet responses, so the walk-through cannot
+fail because a public endpoint is rate-limiting. `--live` points the same watcher at
+devnet and polls read-only, which means whatever transfers that account is actually
+receiving drive real intents.
+
+Three things the demo made visible that no unit test would have:
+
+- **A replay run would poison a live run's cursor.** Both watch the same address,
+  and a cursor is keyed on `(chain, address)` — so the synthetic signature a replay
+  records would be handed to the real node as `until`, which answers `Invalid param:
+  WrongSize`. Replay runs now record under a chain label of their own. The
+  underlying rule is worth keeping: **a cursor is only ever valid for the world that
+  wrote it.**
+- **The simulated bridge moves nothing**, so when it reports delivery the demo
+  reflects that into the mock provider's Safe. That is not a workaround; it is the
+  seam §7.1 describes made concrete — `fund_card` at a `CRYPTO_DEPOSIT` issuer only
+  ever *observes* money that is already there, and something has to have put it
+  there.
+- **The engine's own loop was spending the retry budget** the reconciler exists to
+  demonstrate. With `--inject`, the demo now takes one step and hands over, which is
+  also how the two would divide the work in production.

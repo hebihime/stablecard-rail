@@ -27,8 +27,8 @@ pass, lint and types are clean, and the phase is demo-able.
 | 1 | Skeleton + ledger + state machine | **done** |
 | 2 | Issuer abstraction + mock adapter + webhook receiver | **done** |
 | 3 | Lithic adapter | **done** |
-| 4 | Stripe Issuing adapter | — |
-| 5 | Solana watcher + simulated bridge + auto top-up | — |
+| 4 | Stripe Issuing adapter | **done** |
+| 5 | Solana watcher + simulated bridge + auto top-up | **done** |
 | 6 | Real bridge adapter | — |
 | 7 | 3DS / OTP service | — |
 | 8 | Mobile app | — |
@@ -57,11 +57,17 @@ append-only guarantee: [`docs/DEMO.md`](docs/DEMO.md).
 
 ```
 backend/app/
-├── core/       config, engine + session factory, redis, logging, Money
-├── funding/    FundingState + transition table, FundingIntent, machine.advance()
+├── core/       config, engine + session factory, redis, logging, Money, UTC time,
+│               ExternalError (the retryable marker both subsystems share)
+├── chain/      Solana deposit watcher + slot cursor, JSON-RPC client,
+│               BridgeProvider + deterministic simulator, TransactionSigner,
+│               associated-token-address derivation
+├── funding/    FundingState + transition table, machine.advance(), deposit intake,
+│               the auto top-up engine, the reconciler, deposit routes,
+│               the settlement consumer
 ├── issuers/    CardIssuerAdapter + normalized CardEvent, registry,
 │               per-adapter settings, gnosis_pay_mock (crypto deposit),
-│               lithic (fiat rail)
+│               lithic + stripe_issuing (fiat rails)
 ├── webhooks/   receiver (verify → dedup → parse → ledger → dispatch), EventBus,
 │               retry queue with backoff, dead-letter table
 ├── ledger/     append-only LedgerEvent, event-type constants, writer
@@ -103,12 +109,44 @@ backend/app/
   every card action, provider event and state transition.
 - **Money** is always integer minor units. Non-`int` amounts are rejected at
   construction; there is no float path anywhere in the codebase.
-- **Tests**: 733, against real Postgres and real Redis — all 121 ordered state pairs,
+- **The funding pipeline runs on its own.** A finalized USDC deposit on Solana devnet
+  opens an intent and walks it to `FUNDED` — bridge order, delivery, `fund_card` —
+  with `advance()` still the only writer of state and one ledger row per hop. A
+  deposit is recognised by the watched account's *balance difference*, which is
+  correct for a plain transfer, a `transferChecked`, a mint and a transfer three
+  programs deep in a CPI; the alternative, parsing instructions, has to keep up with
+  every program that can move tokens. Its fixtures are recorded from devnet, and
+  three of them exist because the obvious guess was wrong — a failed transaction
+  still carries token balances, a brand-new account has no prior balance entry at
+  all, and `uiAmount` is a float sitting next to the integer that is the real amount.
+- **Failures split three ways, not two.** A provider or bridge error marked
+  retryable retries in place up to a cap; one that is not fails the intent at once;
+  anything else — a bug, a database blip — propagates and leaves the intent exactly
+  where it was, because `FAILED_*` is terminal and an `AttributeError` is not
+  evidence that a funding failed. The reconciler then picks it up: it scans for
+  intents whose state has been unchanged too long, and its backoff is elapsed time
+  rather than a sleeping worker, so the schedule lives on the row and survives a
+  restart.
+- **The bridge is an interface with a deterministic simulator behind it**, because a
+  demo that fails one run in ten for reasons nobody can see is a demo nobody trusts.
+  Latency is a clock the caller supplies and failure is a mode the caller selects —
+  including the one that matters, *accepted then silent*, which is the only thing
+  that gives the reconciler something real to find.
+- **Money that arrives is not money that lands.** The deposited amount and the
+  bridged amount are separate columns, so a bridge fee stays visible as the
+  difference between two recorded numbers, and the card is funded with what actually
+  arrived. USDC's six decimals convert to a card's two by integer division that
+  truncates and keeps the remainder; a deposit below one cent funds nothing and is
+  recorded as ignored rather than dropped.
+- **Tests**: 1252, against real Postgres and real Redis — all 121 ordered state pairs,
   signature pass/fail per failure mode (including Lithic's own documented worked
   example, so the scheme is pinned to a vector we did not compute), duplicate and
   out-of-order deliveries, idempotent `fund_card`, and a check that models have not
   drifted from migrations. No test calls a live provider API.
-  Coverage on the four gated packages is 100% against SPEC.md §10's 60% floor.
+  Coverage on the five gated packages is 100% against SPEC.md §10's 60% floor — and
+  that number is now *measured* rather than lucky: SQLAlchemy runs the sync DBAPI in
+  a greenlet, so until `concurrency = ["greenlet", "thread"]` was set, every
+  exception handler reached from an awaited query was reported as dead code.
 
 Directories for later phases are absent rather than empty — the tree shows exactly
 what has been built.

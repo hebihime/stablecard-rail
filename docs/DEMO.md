@@ -312,6 +312,90 @@ what moved.
 
 ---
 
+## Phase 5 — Solana watcher, simulated bridge, auto top-up
+
+The whole funding pipeline: a USDC deposit on Solana devnet drives a funding intent
+from `PENDING` to `FUNDED`, with every transition written to the ledger.
+
+```bash
+cd backend
+python scripts/demo_phase5.py                 # replay recorded devnet data — no network
+python scripts/demo_phase5.py --live          # poll devnet for real, read-only
+python scripts/demo_phase5.py --fee 15        # a bridge that charges a fee
+python scripts/demo_phase5.py --inject stuck  # a bridge that goes quiet, and the reconciler
+```
+
+**The default mode needs no credentials and no network.** It replays the responses in
+`backend/tests/fixtures/solana/` — a real 1.000000 USDC `transferChecked`, recorded
+from devnet — so the walk-through cannot fail because a public RPC endpoint is
+rate-limiting. What you should see:
+
+```
+  DEPOSIT_CONFIRMED -> BRIDGING          submitted to simulated
+           BRIDGING -> BRIDGED           bridge delivered 100 USD (minor units)
+                       (bridge delivery reflected into the Safe)
+            BRIDGED -> FUNDED            card funded with 100 USD (minor units)
+```
+
+followed by the ledger for that intent, one row per hop, and the card's balance read
+back from the provider.
+
+`--live` points the same watcher at `api.devnet.solana.com` and polls **read-only**.
+Real transfers to the watched account become real intents. Nothing sends a
+transaction: submitting one belongs to the wallet that owns the money (SPEC.md §9.3,
+phase 8).
+
+### Watching your own address
+
+Optional, and the only part that needs anything from you:
+
+```bash
+# in .env (gitignored)
+SOLANA_DEPOSIT_KEYPAIR=<base58 secret, or the JSON array solana-keygen writes>
+```
+
+The demo then derives that wallet's USDC token account — the address USDC must
+actually be sent to, since a wallet address does not hold tokens itself — and prints
+it. Devnet USDC is free from [faucet.circle.com](https://faucet.circle.com), which
+needs a browser. Send some to the printed address, then run `--live` again.
+
+### Failure injection, and the reconciler
+
+`--inject` makes the bridge misbehave in one of the four ways a real one does:
+
+| Mode | What the pipeline sees | Where the intent ends |
+| --- | --- | --- |
+| `submit_unavailable` | a retryable error; nothing accepted | retried, then `FAILED_BRIDGE` |
+| `submit_rejected` | a permanent refusal | `FAILED_BRIDGE`, at once |
+| `transfer_failed` | accepted, then failed on a later poll | `FAILED_BRIDGE` |
+| `stuck` | accepted, then silence forever | the reconciler retries, then `FAILED_BRIDGE` |
+
+With a failure injected the engine takes one step and the **reconciler** takes over,
+which is how the two divide the work in production. Its thresholds are cut to
+seconds for the demo (the defaults are minutes) and the backoff doubles per retry,
+so the output shows the waiting windows as well as the attempts:
+
+```
+           BRIDGING -> BRIDGING          retrying (1): the bridge has not delivered yet
+           BRIDGING    waiting until 00:56:06
+           BRIDGING -> BRIDGING          retrying (2): the bridge has not delivered yet
+           BRIDGING -> FAILED_BRIDGE     gave up after 2 attempts: ...
+```
+
+### Re-recording the devnet fixtures
+
+```bash
+python scripts/record_solana_fixtures.py            # writes tests/fixtures/solana/
+python scripts/record_solana_fixtures.py --dry-run  # call, print, write nothing
+python scripts/record_solana_fixtures.py --discover # find a current transfer to pin
+```
+
+Read-only and free — no credentials at all. `backend/tests/fixtures/solana/README.md`
+says which files are recorded and which are derived, and which of them exist because
+the obvious guess turned out to be wrong.
+
+---
+
 ## Running the backend on the host instead
 
 Useful for the test suite and for iterating without rebuilds.
@@ -328,13 +412,15 @@ uvicorn app.main:app --reload --port 8000
 python scripts/demo_phase1.py
 python scripts/demo_phase2.py
 python scripts/demo_phase3.py     # needs LITHIC_API_KEY
+python scripts/demo_phase4.py     # needs STRIPE_ISSUING_API_KEY
+python scripts/demo_phase5.py     # needs nothing
 ```
 
 ## Tests
 
 ```bash
 cd backend
-pytest                                   # 733 tests
+pytest                                   # 1252 tests
 pytest --cov --cov-report=term-missing   # coverage gate, SPEC.md §10
 ruff check . && ruff format --check . && mypy
 ```
