@@ -47,6 +47,27 @@ class Settings(BaseSettings):
     # read it, and it has to suit one provider's clock skew and retry schedule at
     # a time — so it lives in each adapter's own settings.
 
+    # --- the funding engine (SPEC.md §5.2) ---------------------------------
+    #: Self-transitions allowed per state before an intent is failed. The count
+    #: lives on the intent, so the cap survives a restart.
+    funding_max_retries: int = 5
+    #: Route the bridge is asked for. Opaque labels a bridge either supports or
+    #: does not (docs/ARCHITECTURE.md §9.2) — not an enum of chains.
+    funding_source_chain: str = "solana-devnet"
+    funding_destination_chain: str = "gnosis-chiado"
+    #: Where a bridge order is delivered when the issuer is a fiat rail and has
+    #: no on-chain address of its own (§9.3). Not a secret: an address.
+    funding_settlement_address: str = ""
+
+    # --- the reconciler (SPEC.md §5.3) ------------------------------------
+    #: How long a state must be unchanged before an intent counts as stuck.
+    reconciler_stuck_after_seconds: int = 120
+    #: The backoff doubles per retry from the threshold above; this caps it, so a
+    #: much-retried intent is still looked at eventually.
+    reconciler_max_backoff_seconds: int = 3_600
+    #: Intents examined per pass.
+    reconciler_batch_limit: int = 50
+
 
 @lru_cache
 def get_settings() -> Settings:

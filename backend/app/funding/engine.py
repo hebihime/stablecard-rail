@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chain.bridge.base import BridgeOrder, BridgeProvider, BridgeStatus
+from app.core.config import Settings
 from app.core.errors import ExternalError
 from app.funding.machine import advance, get_intent
 from app.funding.models import FundingIntent
@@ -59,7 +60,12 @@ _FAILURE_FOR: dict[FundingState, FundingState] = {
 
 @dataclass(frozen=True, slots=True)
 class TopUpPolicy:
-    """Everything the engine needs to know that is not about one intent."""
+    """Everything the engine needs to know that is not about one intent.
+
+    A value object rather than a settings read, so a test — or a second worker
+    with a different route — constructs one directly. `from_settings()` is the
+    only place the environment is consulted.
+    """
 
     #: Self-transitions allowed per state before the intent is failed
     #: (SPEC.md §5.3's cap). Counted on the intent, so it survives a restart.
@@ -70,6 +76,15 @@ class TopUpPolicy:
     #: has no on-chain address of its own (§9.3). Empty means "not configured",
     #: which fails the intent rather than sending money nowhere.
     settlement_address: str = ""
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> TopUpPolicy:
+        return cls(
+            max_retries=settings.funding_max_retries,
+            source_chain=settings.funding_source_chain,
+            destination_chain=settings.funding_destination_chain,
+            settlement_address=settings.funding_settlement_address,
+        )
 
 
 @dataclass(frozen=True, slots=True)

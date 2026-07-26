@@ -1688,3 +1688,45 @@ Failure handling is the phase-2 path unchanged: a settlement naming an intent th
 is *not* `FUNDED` is an illegal transition — ledgered, then retried and
 dead-lettered (§3.7). It means the provider believes a funding completed that we do
 not, which is exactly the kind of thing that should end up in front of a person.
+
+### 9.13 The reconciler's backoff is elapsed time, and its scan has two exclusions
+
+SPEC.md §5.3 asks for a task that finds stuck intents, re-queries, and retries with
+backoff up to a cap. Two decisions in how that is built.
+
+**Backoff is elapsed time, not sleep.** There is no worker holding a timer: an
+intent is simply not eligible again until its state has been unchanged for
+`stuck_after_seconds * 2**retry_count`, capped by `max_backoff_seconds`. Every
+retry bumps `state_changed_at` and `retry_count` through `advance()`, so the
+schedule is a property of the row — it survives a restart, it is the same for every
+worker, and it is visible to anyone reading the table. A sleeping worker's backoff
+is none of those things.
+
+The cap matters in the other direction too: without it, an intent that retried
+eight times would next be looked at in four hours, which is indistinguishable from
+abandoned.
+
+**Two states the scan will not touch.**
+
+- **`FUNDED`.** It is waiting for a settlement event that, at all three providers
+  here, may never be attributable (§9.12). Failing an intent whose card *has the
+  money* would turn a provider limitation into a fabricated incident. So `FUNDED`
+  is excluded from the scan entirely rather than given a longer threshold.
+- **`PENDING` with no `deposit_tx_ref`.** Nobody has sent anything. There is
+  nothing stuck; there is an invoice waiting to be paid.
+
+**`PENDING` *with* a `deposit_tx_ref` is the one thing only the reconciler can
+fix**, and it is worth spelling out because it is invisible from anywhere else. If
+a process dies between `create_intent()` and the `DEPOSIT_CONFIRMED` transition,
+the deposit now *has* an intent — so every later watcher poll finds one, records a
+duplicate, and moves on (§9.5). The intent would sit in `PENDING` forever while the
+money sits on chain. The reconciler advances it, and the `deposit_tx_ref` is what
+makes that safe rather than a guess: the watcher only ever reports `finalized`
+transfers, so the reference existing *is* the confirmation.
+
+**The scan orders oldest-first and takes a batch.** With a limit, ordering is what
+stops the longest-stuck intent from being starved by a steady arrival of newer
+ones. The exponential part of the eligibility test is applied in Python rather than
+in SQL, because `POWER(2, retry_count)` in a predicate is not something an index can
+serve — and what it filters out is a handful of recently-retried rows, not a table
+scan.
