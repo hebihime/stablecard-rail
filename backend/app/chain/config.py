@@ -40,6 +40,12 @@ class SolanaSettings(BaseSettings):
     #: single poll's work bounded and the cursor moving.
     page_limit: int = 25
     request_timeout_seconds: float = 20.0
+    #: SECRET, and the one this service signs Solana transactions with — the owner
+    #: of the deposit ATA the watcher polls. Empty means "not configured", and
+    #: `LocalKeypairSigner` refuses to build rather than inventing a keypair whose
+    #: address nobody funded. Read here rather than through `os.getenv` since
+    #: phase 6, which needs it to *send* rather than only to derive an address.
+    deposit_keypair: str = ""
 
 
 @lru_cache

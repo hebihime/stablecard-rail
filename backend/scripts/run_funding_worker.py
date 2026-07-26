@@ -25,7 +25,8 @@ import logging
 import signal
 from typing import Any
 
-from app.chain.bridge.simulated import BridgeFailureMode, SimulatedBridge, SimulatedBridgeSettings
+from app.chain.bridge.build import BridgeChoice, BridgeSelection, build_bridge
+from app.chain.bridge.simulated import BridgeFailureMode, SimulatedBridgeSettings
 from app.chain.config import get_solana_settings
 from app.chain.rpc import SolanaRpcClient, SolanaRpcError
 from app.chain.solana_watcher import SOLANA_DEVNET, SolanaDepositWatcher
@@ -73,6 +74,11 @@ async def main() -> int:
     parser.add_argument(
         "--first-attempt-after", type=float, help="seconds before a hop's first attempt"
     )
+    parser.add_argument(
+        "--bridge",
+        choices=[choice.value for choice in BridgeChoice],
+        help="which bridge to use; defaults to BRIDGE_PROVIDER, which defaults to simulated",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -82,10 +88,9 @@ async def main() -> int:
     settings = get_settings()
     sessionmaker = get_sessionmaker()
 
-    engine = TopUpEngine(
-        SimulatedBridge.from_settings(SimulatedBridgeSettings()),
-        policy=TopUpPolicy.from_settings(settings),
-    )
+    chosen = BridgeChoice(args.bridge) if args.bridge else BridgeSelection().provider
+    engine = TopUpEngine(build_bridge(chosen), policy=TopUpPolicy.from_settings(settings))
+    logger.info("bridge: %s", chosen.value)
     worker_policy = WorkerPolicy.from_settings(settings)
     if args.first_attempt_after is not None:
         worker_policy = WorkerPolicy(
@@ -102,7 +107,7 @@ async def main() -> int:
     interval = args.interval if args.interval is not None else settings.worker_interval_seconds
 
     mode = SimulatedBridgeSettings().failure_mode
-    if mode is not BridgeFailureMode.NONE:
+    if chosen is BridgeChoice.SIMULATED and mode is not BridgeFailureMode.NONE:
         logger.warning("the bridge has failure injection on: %s", mode)
 
     stopping = asyncio.Event()
