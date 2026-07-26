@@ -86,6 +86,10 @@ AMOUNT_FIELD_BY_KIND: Mapping[str, str] = {
     "Reversal": "reversalAmount",
 }
 
+#: What replaces the one-time code in `raw`. A marker rather than a deletion, so
+#: the ledger records that a code was delivered without recording the code.
+REDACTED = "[redacted]"
+
 #: Their status names -> our provider-side card state, for `card.status.changed`.
 #: The webhook carries a name, not the boolean flags the status endpoint returns.
 STATUS_NAME_MAP: Mapping[str, CardState] = {
@@ -307,8 +311,11 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
             funding_ref=None,
             card_state=STATUS_NAME_MAP.get(str(data.get("newStatus", ""))),
             challenge_id=_optional_str(data.get("challengeId")),
-            # Untouched, so normalizing never loses anything (SPEC.md §7 stores it).
-            raw=envelope.raw,
+            challenge_expires_at=_optional_utc(data.get("expiresAt")),
+            otp_code=_optional_str(data.get("otpCode")),
+            # Untouched, so normalizing never loses anything (SPEC.md §7 stores it)
+            # — with one exception, and `_redact_otp` says why.
+            raw=_redact_otp(envelope.raw),
         )
 
     def _occurred_at(self, headers: Mapping[str, str]) -> datetime:
@@ -386,6 +393,47 @@ def _read_envelope(body: bytes) -> _Envelope:
 
 def _optional_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _optional_utc(value: object) -> datetime | None:
+    """An ISO-8601 timestamp from the payload, or nothing.
+
+    Their bodies carry no timestamps at all as a rule (`_occurred_at` reads the
+    header for that reason); the challenge extension is the exception, because a
+    challenge has a deadline and only the provider knows it.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _redact_otp(raw: dict[str, Any]) -> dict[str, Any]:
+    """The payload, with the one-time code taken out of it.
+
+    The single place where `raw` is not the delivery verbatim, and the reason is
+    that `raw` is what the ledger stores (SPEC.md §7) and the ledger is
+    append-only: a code written there cannot be removed afterwards, and a
+    challenge code with a five-minute life has no business in a permanent audit
+    record. What is kept is that a code *was* present — which is the auditable
+    fact — under `CardEvent.otp_code`, which never serializes anywhere.
+
+    There is precedent for touching `raw`: the Stripe adapter collapses expanded
+    objects back to their ids (docs/ARCHITECTURE.md §8.5). Both are the same
+    judgement — `raw` is for reconstructing what a provider said, not for keeping
+    everything it happened to include.
+
+    A copy, not a mutation: `_read_envelope` hands out the parsed body and its
+    `data` as the same objects, so redacting in place would blank the code before
+    the caller has read it.
+    """
+    data = raw.get("data")
+    if not isinstance(data, dict) or "otpCode" not in data:
+        return raw
+    return {**raw, "data": {**data, "otpCode": REDACTED}}
 
 
 def _currency_from(transaction: Mapping[str, Any]) -> SafeCurrency | None:

@@ -431,6 +431,51 @@ async def test_a_three_ds_challenge(adapter: LithicAdapter) -> None:
     assert 12.34 == event.raw["authentication_object"]["transaction"]["amount"]
 
 
+async def test_a_three_ds_challenge_expires_on_lithics_deadline(adapter: LithicAdapter) -> None:
+    payload = json.loads((FIXTURES / "from_schema" / "event_three_ds_challenge.json").read_text())
+    body = body_of(payload)
+
+    event = await adapter.parse_webhook(headers_for(body), body)
+
+    # Their `challenge` object dates the deadline; the OTP service uses it in
+    # preference to a configured default (§11.3).
+    assert datetime(2026, 7, 25, 12, 39, 56, tzinfo=UTC) == event.challenge_expires_at
+
+
+async def test_lithic_sends_no_code_because_the_card_program_mints_it(
+    adapter: LithicAdapter,
+) -> None:
+    """Not a gap in the fixture — the flow has no code at this point (§11.4).
+
+    Their challenge object is `{challenge_method_type, start_time, expiry_time,
+    app_requestor_url}`, and the guide is explicit that "your organization delivers
+    the challenge to the cardholder through your chosen channel". So an issuer
+    integration *derives* the code, which is what SPEC.md §6.2 allows for, and the
+    absence here is the provider's design rather than ours.
+    """
+    payload = json.loads((FIXTURES / "from_schema" / "event_three_ds_challenge.json").read_text())
+    body = body_of(payload)
+
+    event = await adapter.parse_webhook(headers_for(body), body)
+
+    assert event.otp_code is None
+    # Nor is one hiding under a different name anywhere in the payload.
+    assert "otp" not in json.dumps(payload["challenge"]).lower()
+
+
+async def test_a_challenge_without_an_expiry_is_dated_by_nobody(adapter: LithicAdapter) -> None:
+    # A guessed deadline would put an expiry on a challenge the provider never
+    # dated, and the OTP service would then expire a live code.
+    payload = json.loads((FIXTURES / "from_schema" / "event_three_ds_challenge.json").read_text())
+    del payload["challenge"]["expiry_time"]
+    body = body_of(payload)
+
+    event = await adapter.parse_webhook(headers_for(body), body)
+
+    assert CardEventType.THREE_DS_CHALLENGE is event.event_type
+    assert event.challenge_expires_at is None
+
+
 async def test_a_three_ds_challenge_we_cannot_read_is_unmapped_not_dropped(
     adapter: LithicAdapter,
 ) -> None:

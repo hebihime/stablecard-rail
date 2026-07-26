@@ -42,6 +42,7 @@ from app.issuers.base import (
     WebhookParseError,
 )
 from app.issuers.gnosis_pay_mock import Delivery, GnosisPayMockAdapter
+from app.issuers.gnosis_pay_mock.adapter import REDACTED
 from app.issuers.gnosis_pay_mock.signing import (
     KEY_ALGORITHM,
     SIGNATURE_HEADER,
@@ -829,7 +830,81 @@ async def test_a_three_ds_challenge_carries_its_challenge_id(
     event = await adapter.parse_webhook(delivery.headers, delivery.body)
     assert event.event_type is CardEventType.THREE_DS_CHALLENGE
     assert event.challenge_id is not None
-    assert event.raw["data"]["otpCode"] == "424242"
+    assert "424242" == event.otp_code
+
+
+async def test_a_challenge_expires_when_the_provider_says_it_does(
+    adapter: GnosisPayMockAdapter,
+) -> None:
+    # Not on a default of ours: the challenge has a deadline and the code must not
+    # outlive it (§11.3). The adapter's clock is pinned to FIXED_NOW.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id, ttl_seconds=120)
+
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert FIXED_NOW + timedelta(seconds=120) == event.challenge_expires_at
+
+
+async def test_the_one_time_code_is_taken_out_of_the_raw_payload(
+    adapter: GnosisPayMockAdapter,
+) -> None:
+    # The one exception to "raw is the delivery verbatim", and the reason is that
+    # `raw` is what the append-only ledger stores. What survives is that a code was
+    # delivered, not the code (§11.2).
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_three_ds_challenge(card_id, code="424242")
+
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert "424242" not in json.dumps(event.raw)
+    assert REDACTED == event.raw["data"]["otpCode"]
+    # The delivery itself is untouched — redaction happens on the way in, so the
+    # bytes a signature was computed over are still verifiable.
+    assert "424242" == json.loads(delivery.body)["data"]["otpCode"]
+
+
+@pytest.mark.parametrize("expires_at", ["", "not a timestamp", "2026-13-45", 300, None])
+async def test_an_unreadable_expiry_dates_nothing_rather_than_failing(
+    adapter: GnosisPayMockAdapter, expires_at: object
+) -> None:
+    # A challenge whose deadline we cannot read is still a challenge — the OTP
+    # service falls back to its configured TTL. Refusing the whole delivery over an
+    # unparseable field would lose a live challenge.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_unknown(
+        "card.three-ds.challenge",
+        {"cardToken": card_id, "challengeId": "3ds_1", "expiresAt": expires_at},
+    )
+
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert CardEventType.THREE_DS_CHALLENGE is event.event_type
+    assert event.challenge_expires_at is None
+
+
+async def test_an_expiry_without_an_offset_is_read_as_utc(
+    adapter: GnosisPayMockAdapter,
+) -> None:
+    # The same rule as everywhere else in this system: a naive timestamp from a
+    # provider whose API is UTC means UTC. Reading it as local time would move the
+    # deadline by hours.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_unknown(
+        "card.three-ds.challenge",
+        {"cardToken": card_id, "challengeId": "3ds_1", "expiresAt": "2026-07-25T12:05:00"},
+    )
+
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert datetime(2026, 7, 25, 12, 5, tzinfo=UTC) == event.challenge_expires_at
+
+
+async def test_an_event_that_carries_no_code_is_not_rewritten(
+    adapter: GnosisPayMockAdapter,
+) -> None:
+    # Redaction must be a no-op for everything else, or `raw` stops being evidence.
+    card_id = await make_card(adapter)
+    delivery = adapter.simulator.emit_card_status_changed(card_id)
+
+    event = await adapter.parse_webhook(delivery.headers, delivery.body)
+    assert json.loads(delivery.body) == event.raw
 
 
 @pytest.mark.parametrize("event_type", ["user.created", "user.tos.accepted", "kyc.status.changed"])

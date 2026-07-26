@@ -607,7 +607,19 @@ def _event_currency(event: Mapping[str, Any]) -> str:
 
 
 def _three_ds_event(common: dict[str, Any], payload: Mapping[str, Any]) -> CardEvent:
-    """A 3DS challenge, for the OTP service in phase 7 (SPEC.md §6).
+    """A 3DS challenge, for the OTP service (SPEC.md §6).
+
+    **No `otp_code`, and not because it is hidden somewhere in the payload.** Their
+    `challenge` object is `{challenge_method_type, start_time, expiry_time,
+    app_requestor_url}` and carries no code, because in the flow that produces this
+    webhook there is not one yet: "Your organization delivers the challenge to the
+    cardholder through your chosen channel"
+    (https://docs.lithic.com/docs/3ds-challenge-flow). The card program is the party
+    that mints and sends the code — which is what SPEC.md §6.2's "derives" means,
+    and it is the protocol rather than a shortcut (docs/ARCHITECTURE.md §11.4).
+
+    `expiry_time` *is* there, so the challenge dies on their deadline rather than
+    on our default. Their guide puts it at "typically within 10 minutes".
 
     The amount is deliberately not normalized: Lithic states it as a decimal number
     plus a `currency_exponent`, money here is integer minor units only, and there is
@@ -616,6 +628,7 @@ def _three_ds_event(common: dict[str, Any], payload: Mapping[str, Any]) -> CardE
     authentication = payload.get("authentication_object")
     if not isinstance(authentication, Mapping):
         return CardEvent(**common, event_type=CardEventType.UNMAPPED)
+    challenge = payload.get("challenge")
     return CardEvent(
         **{
             **common,
@@ -624,6 +637,9 @@ def _three_ds_event(common: dict[str, Any], payload: Mapping[str, Any]) -> CardE
         },
         event_type=CardEventType.THREE_DS_CHALLENGE,
         challenge_id=_optional_str(authentication.get("token")),
+        challenge_expires_at=(
+            _optional_utc(challenge.get("expiry_time")) if isinstance(challenge, Mapping) else None
+        ),
     )
 
 
@@ -750,3 +766,15 @@ def _utc(value: object, *, fallback: datetime) -> datetime:
     except ValueError:
         return fallback
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _optional_utc(value: object) -> datetime | None:
+    """The same, for a timestamp whose absence is meaningful.
+
+    `_utc` needs a fallback because every `CardEvent` has an `occurred_at`. An
+    expiry has no sensible stand-in: guessing one would put a deadline on a
+    challenge the provider never dated.
+    """
+    sentinel = datetime.min.replace(tzinfo=UTC)
+    parsed = _utc(value, fallback=sentinel)
+    return None if parsed == sentinel else parsed

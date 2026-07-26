@@ -72,6 +72,12 @@ MAX_ACTIVE_CARDS = 5
 #: `POST /api/v1/ephemeral-token` mints a token with a 60-second lifespan.
 EPHEMERAL_TOKEN_TTL_SECONDS = 60
 
+#: How long an emitted 3DS challenge stays answerable. Five minutes, matching the
+#: `start_time`/`expiry_time` gap in Lithic's own challenge fixture — a real 3DS
+#: challenge is minutes, not hours, and the OTP service takes its TTL from this
+#: rather than from a default of ours (docs/ARCHITECTURE.md §11.3).
+CHALLENGE_TTL_SECONDS = 300
+
 
 @dataclass(frozen=True, slots=True)
 class SafeCurrency:
@@ -1110,11 +1116,27 @@ class GnosisPaySimulator:
             PROVIDER_EVENT_TYPES["transaction_cleared"], self._transaction_data(transaction)
         )
 
-    def emit_three_ds_challenge(self, card_id: str, *, code: str = "123456") -> Delivery:
+    def emit_three_ds_challenge(
+        self,
+        card_id: str,
+        *,
+        code: str = "123456",
+        ttl_seconds: int = CHALLENGE_TTL_SECONDS,
+    ) -> Delivery:
         """A 3DS challenge — an extension, not a documented Gnosis Pay event.
 
         SPEC.md §6 allows the mock's simulator to carry the phase-7 OTP path, and
         this provider publishes nothing that fits. See `EXTENSION_EVENT_TYPES`.
+
+        This is the **ACS-orchestrated** shape deliberately: the provider generated
+        the code and tells us what it is, which is the opposite of Lithic's
+        customer-orchestrated flow, where we mint it. One of each is what makes the
+        OTP service's two paths both real (docs/ARCHITECTURE.md §11.4) — and it is
+        why `otpCode` is a secret arriving in a webhook body, which is the whole
+        reason `CardEvent.otp_code` never serializes.
+
+        `expiresAt` mirrors the `expiry_time` a real 3DS challenge object carries:
+        the challenge has a deadline of its own and the code should not outlive it.
         """
         card = self._require_card(card_id)
         return self._emit(
@@ -1124,6 +1146,7 @@ class GnosisPaySimulator:
                 "cardToken": card.card_token,
                 "challengeId": self._next("3ds"),
                 "otpCode": code,
+                "expiresAt": (self._now() + timedelta(seconds=ttl_seconds)).isoformat(),
             },
         )
 

@@ -259,6 +259,22 @@ class CardEvent(_Frozen):
     card_state: CardState | None = None
     #: Populated for `THREE_DS_CHALLENGE` (consumed by the OTP service, phase 7).
     challenge_id: str | None = None
+    #: When the challenge dies, if the provider says. 3DS challenges are short —
+    #: Lithic's are typically ten minutes — and the provider's own deadline beats a
+    #: configured default, because a code that outlives the challenge is a code the
+    #: cardholder can enter and be declined for (docs/ARCHITECTURE.md §11.3).
+    challenge_expires_at: UtcDatetime | None = None
+    #: The one-time code, when the provider issues one rather than expecting us to.
+    #:
+    #: **`exclude=True`, and that is load-bearing.** A `CardEvent` is serialized
+    #: into four stores — the ledger, the `EventBus` stream, the handler retry
+    #: queue and the dead-letter table — and three of them outlive a five-minute
+    #: code; the ledger is append-only, so a code written there cannot even be
+    #: redacted afterwards. Excluding the field on the *model* is the only fix that
+    #: covers a sink nobody has written yet (§11.2). The code therefore exists in
+    #: memory between `parse_webhook` and the OTP handler, and nowhere else but
+    #: Redis under a TTL.
+    otp_code: str | None = Field(default=None, exclude=True)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
