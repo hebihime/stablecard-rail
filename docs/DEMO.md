@@ -359,6 +359,31 @@ actually be sent to, since a wallet address does not hold tokens itself — and 
 it. Devnet USDC is free from [faucet.circle.com](https://faucet.circle.com), which
 needs a browser. Send some to the printed address, then run `--live` again.
 
+### Making it run on its own
+
+The demo script drives the pipeline itself, which is what makes it a demo. In a
+deployment nothing calls the watcher or the engine — so a deposit would arrive and
+sit there. That is what the worker is for:
+
+```bash
+python scripts/run_funding_worker.py --once                    # one pass, then exit
+python scripts/run_funding_worker.py                           # loop until Ctrl-C
+python scripts/run_funding_worker.py --interval 2 --stuck-after 3   # demo pacing
+```
+
+One pass polls every address in `deposit_routes` — that table *is* the list of what
+to watch, because a route exists precisely because somebody was told to send money
+there — then drives intents the engine owns that have not yet retried, then
+reconciles the rest. `--once` is what a cron entry or a Compose sidecar wants; the
+loop is for a laptop, and Ctrl-C stops it between passes rather than mid-transition.
+
+It is not part of the API process, deliberately: a worker that lives in the web
+process dies with it and cannot be run by hand.
+
+So the full "show someone" sequence is: register a route (the demo does it, or the
+fund screen will in phase 8), start the worker, send devnet USDC, and watch
+`GET /ledger?card_id=…`.
+
 ### Failure injection, and the reconciler
 
 `--inject` makes the bridge misbehave in one of the four ways a real one does:

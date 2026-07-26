@@ -30,6 +30,8 @@ not.
 from __future__ import annotations
 
 import logging
+import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -90,7 +92,7 @@ class ReconcilerPolicy:
 class ReconcilePlan:
     """One intent's eligibility, so a report can explain a quiet pass."""
 
-    intent_id: object
+    intent_id: uuid.UUID
     state: FundingState
     retry_count: int
     due_at: datetime
@@ -156,13 +158,23 @@ async def reconcile(
     *,
     now: datetime,
     policy: ReconcilerPolicy | None = None,
+    skip: Collection[uuid.UUID] = (),
 ) -> ReconcileReport:
-    """One pass: step every intent that is stuck and out of backoff. Commits."""
+    """One pass: step every intent that is stuck and out of backoff. Commits.
+
+    `skip` is for a caller that has already stepped an intent in this cycle — the
+    worker drives fresh work itself (§9.16). An intent that moved a moment ago is
+    not stuck, and stepping it twice in one pass would poll the same bridge twice
+    and count the second answer as a retry.
+    """
     policy = policy or ReconcilerPolicy()
     stepped: list[StepOutcome] = []
     waiting: list[ReconcilePlan] = []
+    excluded = frozenset(skip)
 
     for intent in await find_stuck(session, now=now, policy=policy):
+        if intent.id in excluded:
+            continue
         due = due_after(intent, policy)
         if now < due:
             waiting.append(

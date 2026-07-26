@@ -1786,3 +1786,40 @@ Three things the demo made visible that no unit test would have:
 - **The engine's own loop was spending the retry budget** the reconciler exists to
   demonstrate. With `--inject`, the demo now takes one step and hands over, which is
   also how the two would divide the work in production.
+
+### 9.16 The worker, and why new work and failing work are paced differently
+
+Phase 5 built a watcher that polls when asked and an engine that steps when asked,
+and for a while nothing asked outside a demo script. `funding/worker.py` is the
+caller: **poll every watched address, drive what is new, reconcile the rest.**
+
+`deposit_routes` is the list of addresses to poll, which falls out of what a route
+*is*: it exists because somebody was told to send money to that address. Anything
+registered has to be watched and nothing else needs to be, and re-reading the table
+every pass means a route registered while the worker runs is picked up without a
+restart.
+
+**Two stepping paths, not one**, and this is the decision worth recording. The
+reconciler is defined by state *age* (SPEC.md §5.3: "state age > threshold") and
+that threshold is minutes, because its job is to notice silence. Driving new work
+through it would make a confirmed deposit wait minutes for its bridge order. But
+driving *everything* promptly is worse: an intent in `BRIDGING` behind a 30-second
+bridge would be re-polled on every pass, and since a "not delivered yet" answer is
+a retry, a five-second loop would exhaust a five-retry budget in half a minute and
+fail a transfer that was about to succeed.
+
+So: **first attempts are prompt, retries are paced.** The filter is
+`retry_count == 0` — the moment an intent has retried once, its schedule becomes the
+reconciler's business. There is still a small `first_attempt_after_seconds` delay
+(default 3s), because whichever process created the intent is probably about to step
+it and a worker racing that only contends on the row lock.
+
+The two paths overlap on one case — an un-retried intent old enough to look stuck —
+so the driver reports what it touched and `reconcile(skip=…)` honours it. Without
+that, one pass would poll the same bridge twice and count the second answer as a
+retry, which is the exact failure the split exists to avoid.
+
+**An RPC failure does not stop the loop.** The node is asked again next pass, and
+because the cursor is only advanced for what was fully accounted for, nothing is
+lost meanwhile. Verified against a live 429 from the public devnet endpoint, which
+is also where `error_rate_limited.json` came from.

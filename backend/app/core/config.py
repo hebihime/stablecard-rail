@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     #: Intents examined per pass.
     reconciler_batch_limit: int = 50
 
+    # --- the worker loop ---------------------------------------------------
+    #: How long a hop is left alone before its *first* attempt. Retries are the
+    #: reconciler's business and are paced by its backoff instead.
+    worker_first_attempt_after_seconds: float = 3.0
+    #: Seconds between passes when the worker runs as a loop rather than --once.
+    worker_interval_seconds: float = 5.0
+
 
 @lru_cache
 def get_settings() -> Settings:

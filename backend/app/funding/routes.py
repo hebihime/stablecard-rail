@@ -44,6 +44,7 @@ __all__ = [
     "require_route",
     "route_for",
     "routes_for_card",
+    "watched_addresses",
 ]
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,21 @@ async def require_route(session: AsyncSession, *, chain: str, deposit_address: s
     if route is None:
         raise UnroutableDepositError(chain, deposit_address)
     return route
+
+
+async def watched_addresses(session: AsyncSession, *, chain: str) -> list[str]:
+    """Every address on one chain that some card is waiting on.
+
+    This table *is* the worker's list of what to watch: a route exists because
+    somebody was told to send money to that address, so anything registered has
+    to be polled and nothing else needs to be.
+    """
+    result = await session.execute(
+        select(DepositRoute.deposit_address)
+        .where(DepositRoute.chain == chain)
+        .order_by(DepositRoute.deposit_address)
+    )
+    return list(result.scalars().all())
 
 
 async def routes_for_card(
