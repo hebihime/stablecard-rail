@@ -2,7 +2,10 @@
 
 Routers land with their phases (SPEC.md §12). Phase 1 brought the ledger read
 surface and a health probe; phase 2 adds card lifecycle and webhook receipt. The
-OTP surface (§6) and the funding read surface arrive in phases 7 and 5.
+OTP surface (§6) arrives in phase 7. Phase 5 adds no route — its work is driven by
+the chain and by webhooks, not by callers — but it does connect the settlement
+consumer here, because `webhooks/dispatch` holds subscriptions process-wide and
+registers none of its own.
 
 Importing `app.issuers` is what registers the adapters — see that package's
 docstring. It is imported for effect here so the registry is populated before the
@@ -25,9 +28,10 @@ from app.api.errors import install_exception_handlers
 from app.api.ledger import router as ledger_router
 from app.api.webhooks import router as webhooks_router
 from app.core.config import get_settings
-from app.core.db import get_session
+from app.core.db import get_session, get_sessionmaker
 from app.core.logging import configure_logging
 from app.core.redis import get_redis
+from app.funding.settlement import subscribe_settlement
 
 health_router = APIRouter(tags=["ops"])
 
@@ -57,6 +61,11 @@ def create_app() -> FastAPI:
         docs_url="/docs",
     )
     app.state.environment = settings.environment
+    # Phase 5's consumer. `webhooks/dispatch` holds subscriptions process-wide and
+    # deliberately registers none itself (docs/ARCHITECTURE.md §3.10), so this is
+    # where the funding side is connected: without it a settlement is verified,
+    # deduped, ledgered and published — and then handled by nobody.
+    subscribe_settlement(get_sessionmaker())
     install_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(cards_router)

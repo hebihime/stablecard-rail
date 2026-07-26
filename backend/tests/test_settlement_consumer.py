@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 import pytest
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -25,6 +26,7 @@ from app.funding.settlement import (
 from app.funding.states import FundingState
 from app.issuers.base import CardEvent, CardEventType
 from app.ledger import event_types
+from app.main import create_app
 from app.webhooks.bus import RedisStreamsEventBus
 from app.webhooks.dispatch import dispatch, handlers_for, subscriptions
 from app.webhooks.retry import RetryQueue
@@ -243,3 +245,19 @@ async def test_the_handler_opens_its_own_session(
     await handler(a_settlement(funding_ref=str(intent.id)))
 
     assert (await reload_intent(session, intent.id)).state is FundingState.SETTLED
+
+
+async def test_the_running_app_subscribes_the_consumer(client: httpx.AsyncClient) -> None:
+    # Without this wiring a settlement is verified, deduped, ledgered and
+    # published on the bus — and then handled by nobody, which is the quietest
+    # possible way for phase 5 to be half-finished.
+    assert (CardEventType.SETTLEMENT, HANDLER_NAME) in subscriptions()
+
+
+async def test_building_the_app_twice_is_not_an_error() -> None:
+    # `create_app()` runs once per test in this suite, and subscriptions are
+    # process-wide, so registering the same consumer again must be a no-op.
+    create_app()
+    create_app()
+
+    assert [name for name, _ in handlers_for(CardEventType.SETTLEMENT)] == [HANDLER_NAME]

@@ -123,8 +123,18 @@ def make_settlement_handler(sessionmaker: async_sessionmaker[AsyncSession]) -> H
 
 
 def subscribe_settlement(sessionmaker: async_sessionmaker[AsyncSession]) -> None:
-    """Register the consumer. Called by the composition root, not at import."""
+    """Register the consumer. Called by the composition root, not at import.
+
+    `replace=True` makes this idempotent: `create_app()` can run more than once in
+    a process — the test suite builds an app per test — and re-registering the
+    same consumer under the same name must not be an error.
+    """
     # idempotency key: (intent_id, "SETTLED") — `advance()` dedups on it, so a
     # replayed delivery and a second settlement for the same funding both
     # collapse to a no-op rather than raising out of a terminal state.
-    subscribe(CardEventType.SETTLEMENT, HANDLER_NAME, make_settlement_handler(sessionmaker))
+    subscribe(
+        CardEventType.SETTLEMENT,
+        HANDLER_NAME,
+        make_settlement_handler(sessionmaker),
+        replace=True,
+    )
