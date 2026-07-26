@@ -1334,3 +1334,31 @@ async def test_deliveries_can_be_drained(adapter: GnosisPayMockAdapter) -> None:
 async def test_the_simulator_lists_its_cards(adapter: GnosisPayMockAdapter) -> None:
     card_id = await make_card(adapter)
     assert adapter.simulator.card_ids == (card_id,)
+
+
+async def test_a_seeded_sequence_does_not_reissue_earlier_ids(
+    adapter: GnosisPayMockAdapter,
+) -> None:
+    # For a demo running against a shared, append-only ledger: the simulator numbers
+    # from 1 on every start, so a second run would re-issue `3ds_000001` and collide
+    # with its own earlier ledger row.
+    card_id = await make_card(adapter)
+    adapter.simulator.seed_sequence("3ds", 41)
+
+    first = adapter.simulator.emit_three_ds_challenge(card_id)
+    second = adapter.simulator.emit_three_ds_challenge(card_id)
+
+    assert "3ds_000042" == json.loads(first.body)["data"]["challengeId"]
+    assert "3ds_000043" == json.loads(second.body)["data"]["challengeId"]
+
+
+async def test_a_sequence_never_moves_backwards(adapter: GnosisPayMockAdapter) -> None:
+    # Seeding is a floor, not an assignment: rewinding it would re-issue an id this
+    # process has already used, which is worse than the problem it solves.
+    card_id = await make_card(adapter)
+    adapter.simulator.seed_sequence("3ds", 100)
+    adapter.simulator.seed_sequence("3ds", 5)
+
+    issued = adapter.simulator.emit_three_ds_challenge(card_id)
+
+    assert "3ds_000101" == json.loads(issued.body)["data"]["challengeId"]

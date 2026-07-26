@@ -417,6 +417,22 @@ class GnosisPaySimulator:
         """Pin the provider's clock. For tests and demos of expiry paths."""
         self._clock = lambda: moment
 
+    def seed_sequence(self, kind: str, value: int) -> None:
+        """Start one id counter partway along. For demos against a shared database.
+
+        This simulator is in-process, so every restart numbers its objects from 1
+        again — while the ledger is append-only and outlives the run. A demo run
+        therefore re-issues `3ds_000001`, whose ledger row already exists under the
+        same idempotency key, and the second run is either refused or reports the
+        first run's row as its own. Neither is a bug in the service (a provider
+        genuinely reusing an id should collapse to one row) but both make a demo
+        lie about what it just did.
+
+        A sibling of `advance_clock`, and for the same reason: state a real provider
+        keeps and this one has to be told.
+        """
+        self._counters[kind] = max(self._counters.get(kind, 0), value)
+
     def _require_user(self, user_id: str) -> UserRecord:
         user = self._users.get(user_id)
         if user is None:

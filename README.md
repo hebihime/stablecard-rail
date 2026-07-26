@@ -30,7 +30,7 @@ pass, lint and types are clean, and the phase is demo-able.
 | 4 | Stripe Issuing adapter | **done** |
 | 5 | Solana watcher + simulated bridge + auto top-up | **done** |
 | 6 | Real bridge adapter | **done** |
-| 7 | 3DS / OTP service | — |
+| 7 | 3DS / OTP service | **done** |
 | 8 | Mobile app | — |
 | 9 | Fireblocks signer (stretch) | — |
 | 10 | Docs + polish | — |
@@ -50,6 +50,7 @@ cd backend && python scripts/demo_phase3.py                  # a real fiat-rail 
 
 cd backend && python scripts/demo_phase5.py                  # the funding pipeline, no network
 cd backend && python scripts/demo_phase6.py                  # the real bridge, verified live
+cd backend && python scripts/demo_phase7.py                  # the 3DS/OTP flow, no network
 ```
 
 Full walk-through — card lifecycle over HTTP, signed webhook deliveries, duplicate
@@ -110,6 +111,30 @@ backend/app/
   order reference — from a *signature* over it, so the address is reproducible by us
   and unguessable by anyone else — and a retry finds the account already on chain and
   reads its sequence back instead of sending again.
+- **The OTP code is the first value here that must stop existing**, and that shaped the
+  whole 3DS phase. A `CardEvent` reaches four stores and three of them outlive a
+  five-minute code — the event stream, the retry queue, the dead-letter table — while
+  the ledger is worse than durable: it is append-only, so a code written there cannot
+  be redacted afterwards. All three serialize with `model_dump`, so the fix is on the
+  model rather than at each sink: `otp_code` is `Field(exclude=True)` and no serializer
+  anywhere can emit it, including one nobody has written yet. The code lives in memory
+  and in Redis under a TTL, the push channel is pub/sub precisely *because* it keeps
+  nothing, and the challenge webhook's `raw` reaches the ledger with the code replaced
+  by `[redacted]`.
+- **"Extracts/derives the code" turned out to describe two providers, not a fallback.**
+  The mock is ACS-orchestrated and sends the code; Lithic's flow is
+  customer-orchestrated — "your organization delivers the challenge to the cardholder
+  through your chosen channel" — so when their webhook arrives no code exists anywhere
+  and minting one is the protocol. Stripe publishes no issuer-facing challenge at all.
+  So the deadline comes from the provider when they date one, and the challenge records
+  whether the code is ours or theirs.
+- **Approve/decline is a capability, not a lookup table.** `respond_to_challenge` is on
+  the issuer interface, non-abstract, defaulting to `ChallengeResponseUnsupported` — so
+  a provider with no such endpoint has its decision ledgered with what would have been
+  sent, and Stripe needed no code to say so. Lithic really has the endpoint, and two of
+  its details came off their embedded OpenAPI rather than the prose on the same page:
+  the decline value is `DECLINE_BY_CUSTOMER`, and success is 200 with no body. Their
+  404 has no body either, which is in neither — it was recorded.
 - **`gnosis_pay_mock`** models the Gnosis Pay partner pattern, shaped on their public
   docs: a Safe smart account per user on Gnosis Chain, and funding that is a confirmed
   stablecoin transfer into it rather than an API call — so `fund_card` verifies and

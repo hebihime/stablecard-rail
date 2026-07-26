@@ -26,19 +26,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.money import Money
 from app.core.time import utcnow
-from app.issuers.base import CardEvent, CardEventType
+from app.issuers import registry
+from app.issuers.base import CardEvent, CardEventType, ChallengeDecision
 from app.ledger import event_types
 from app.main import create_app
 from app.otp.push import subscription
 from app.otp.service import (
     HANDLER_NAME,
+    answer_challenge,
     deliver_challenge,
     make_challenge_handler,
     subscribe_challenges,
 )
 from app.otp.store import OtpChallenge, OtpStore, Remembered
 from app.webhooks import dispatch
-from tests.support import all_ledger_events
+from tests.support import StubIssuerAdapter, all_ledger_events
 
 NOW = datetime(2026, 7, 25, 12, 0, tzinfo=UTC)
 CODE = "918273"
@@ -346,3 +348,63 @@ def test_the_running_app_subscribes_the_consumer() -> None:
     create_app()
 
     assert (CardEventType.THREE_DS_CHALLENGE, HANDLER_NAME) in dispatch.subscriptions()
+
+
+# ---------------------------------------------------- the ledger converges ----
+
+
+async def test_an_answer_recorded_twice_is_one_row(
+    session: AsyncSession, redis_client: Redis
+) -> None:
+    """The ledger write must tolerate an existing row, and here is why.
+
+    Every row this module writes is keyed on the challenge, so a retried response
+    finds its own row already there. Raising instead would surface as a failure for
+    something that had already succeeded. Found by running `demo_phase7.py` twice:
+    the mock's ids restart with the process and the ledger does not.
+
+    A provider with **no** response endpoint is the path that reaches here twice. One
+    with an endpoint refuses the second answer itself — `ChallengeAlreadyAnswered`
+    propagates and the ledger is never touched, which is also correct.
+    """
+    stub = StubIssuerAdapter()
+    registry.register(stub.provider_id, lambda: stub, replace=True)
+    stored = OtpChallenge(
+        provider_id=stub.provider_id,
+        challenge_id="3ds_stub",
+        card_id="card_1",
+        event_id="evt-1",
+        code=CODE,
+        delivered_at=NOW,
+        expires_at=NOW + timedelta(minutes=5),
+    )
+
+    first = await answer_challenge(
+        session, redis_client, stored, ChallengeDecision.APPROVE, now=utcnow()
+    )
+    second = await answer_challenge(
+        session, redis_client, stored, ChallengeDecision.DECLINE, now=utcnow()
+    )
+
+    assert first.delivered is False
+    assert second.delivered is False
+    responded = [
+        row for row in await all_ledger_events(session) if row.event_type == "otp.responded"
+    ]
+    assert 1 == len(responded)
+    # The first decision is the one on the record, not the last writer's.
+    assert "approve" == responded[0].payload["decision"]
+
+
+async def test_an_undeliverable_challenge_recorded_twice_is_one_row(
+    session: AsyncSession, redis_client: Redis
+) -> None:
+    dead = challenge_event(challenge_expires_at=NOW - timedelta(seconds=1))
+
+    await deliver_challenge(session, redis_client, dead, now=NOW)
+    await deliver_challenge(session, redis_client, dead, now=NOW)
+
+    rows = [
+        row for row in await all_ledger_events(session) if row.event_type == "otp.undeliverable"
+    ]
+    assert 1 == len(rows)

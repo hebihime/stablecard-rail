@@ -31,6 +31,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -176,11 +177,26 @@ async def deliver_challenge(
     return OtpDelivery(outcome=outcome, challenge=challenge)
 
 
+async def _record_once(session: AsyncSession, *, idempotency_key: str, **fields: Any) -> bool:
+    """Write one ledger row, unless it is already there. Commits. `True` if it wrote.
+
+    Every row this module writes is keyed on the *challenge* rather than on the
+    delivery, so a re-delivered webhook, a re-run handler and a retried response all
+    converge on one row. Checking first rather than catching the unique violation:
+    the ledger row is written *after* the durable work, so an exception here would
+    surface as a failure for something that had already succeeded — in the response
+    path, for a decision the provider has already been told.
+    """
+    if await find_by_idempotency_key(session, idempotency_key) is not None:
+        logger.debug("ledger row %s already exists; nothing to add", idempotency_key)
+        return False
+    await record(session, idempotency_key=idempotency_key, **fields)
+    await session.commit()
+    return True
+
+
 async def _ledger_delivered(session: AsyncSession, challenge: OtpChallenge) -> None:
-    key = delivered_idempotency_key(challenge.provider_id, challenge.challenge_id)
-    if await find_by_idempotency_key(session, key) is not None:
-        return
-    await record(
+    await _record_once(
         session,
         event_type=event_types.OTP_DELIVERED,
         occurred_at=challenge.delivered_at,
@@ -188,7 +204,7 @@ async def _ledger_delivered(session: AsyncSession, challenge: OtpChallenge) -> N
         cardholder_id=challenge.cardholder_id,
         card_id=challenge.card_id,
         amount=_amount_of(challenge),
-        idempotency_key=key,
+        idempotency_key=delivered_idempotency_key(challenge.provider_id, challenge.challenge_id),
         # No code, ever. `raw` already went to the ledger with the provider's
         # delivery, redacted (§11.2); this row is about what we did with it.
         payload={
@@ -198,13 +214,12 @@ async def _ledger_delivered(session: AsyncSession, challenge: OtpChallenge) -> N
             "expires_at": challenge.expires_at.isoformat(),
         },
     )
-    await session.commit()
 
 
 async def _ledger_undeliverable(
     session: AsyncSession, challenge: OtpChallenge, *, reason: str, now: datetime
 ) -> None:
-    await record(
+    await _record_once(
         session,
         event_type=event_types.OTP_UNDELIVERABLE,
         occurred_at=challenge.delivered_at,
@@ -221,7 +236,6 @@ async def _ledger_undeliverable(
             "observed_at": now.isoformat(),
         },
     )
-    await session.commit()
 
 
 def _amount_of(challenge: OtpChallenge) -> Money | None:
@@ -336,7 +350,7 @@ async def _ledger_responded(
     session: AsyncSession, answer: ChallengeAnswer, *, now: datetime
 ) -> None:
     challenge = answer.challenge
-    await record(
+    await _record_once(
         session,
         event_type=event_types.OTP_RESPONDED,
         occurred_at=now,
@@ -362,4 +376,3 @@ async def _ledger_responded(
             },
         },
     )
-    await session.commit()

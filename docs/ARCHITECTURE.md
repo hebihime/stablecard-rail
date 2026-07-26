@@ -2233,3 +2233,311 @@ behaves — when a node's view catches up, what it says when you cannot pay, wha
 says when it already has your transaction, and what it says when the work is already
 done. §8.10 learned the same thing from a live Stripe account. It appears to be the
 rule rather than the exception.
+
+## 11. Decisions recorded in phase 7
+
+Phase 7 adds the 3DS/OTP service (SPEC.md §6): a challenge webhook becomes a code in
+Redis, reaches the app by polling **and** by WebSocket, and comes back as an approve
+or a decline. It is the smallest phase by volume and the one that broke the most
+assumptions, because it introduces the first value in this system that is **supposed
+to stop existing**. Everything built so far — the append-only ledger, the replayable
+event stream, the retry queue that survives a restart, the dead-letter table — is
+machinery for not losing things.
+
+### 11.1 A package of its own, which SPEC.md §1 does not name
+
+SPEC.md §1's tree lists `api/` with "(cards, funding, webhooks, otp)" and no service
+package behind it. `app/otp/` is therefore an addition, and the reason it is not part
+of either neighbour is worth stating rather than assuming:
+
+- **not `webhooks/`** — that package owns *arrival*. Its whole value is that it does
+  not know what any particular event means; the receiver ledgers and dispatches
+  identically for a settlement and a challenge. Teaching it about codes and TTLs
+  would undo the property that makes "adding an issuer changes no webhook code" true.
+- **not `funding/`** — that package owns money, and a challenge moves none. It would
+  also put the OTP path behind the funding state machine, which has no state for
+  "waiting for a cardholder to read a number".
+
+What is left is one short-lived secret and the two ways an app can be told about it,
+which is a small package with a sharp boundary. `tests/test_module_boundaries.py`
+covers it automatically: `app/otp/` is outside `issuers/`, so it may import only
+`issuers/base.py` and `issuers/registry.py`, and it does.
+
+### 11.2 The first value that must not be durable, and where it wanted to leak
+
+SPEC.md §6.2 says the code lives in Redis "with a short TTL". Tracing what a
+`CardEvent` actually touches turned that one line into the phase's central
+constraint. An event carrying a code reaches **four** stores:
+
+| Store | Lifetime | Reached how |
+| --- | --- | --- |
+| `ledger_events` | forever, and **append-only** | `receiver.receive` writes `raw` |
+| the `EventBus` stream | 10 000 entries, no TTL | `dispatch` publishes every event |
+| the handler retry queue | until drained | a handler failure schedules it |
+| `webhook_dead_letters.event` | forever (JSONB) | retries exhausted |
+
+Three of the four outlive a five-minute code, and the ledger is worse than durable:
+its trigger blocks `UPDATE` and `DELETE`, so a code written there cannot be redacted
+afterwards even deliberately.
+
+All three of the serializing sinks use `model_dump`, so the fix belongs on the model
+rather than at each call site:
+
+```python
+otp_code: str | None = Field(default=None, exclude=True)
+```
+
+`exclude=True` means **no serializer anywhere can emit it** — including a sink nobody
+has written yet, which is the part a per-call-site fix cannot promise. The field
+exists in memory from `parse_webhook` to the handler, and the only place it is ever
+written is Redis, under a TTL, by the one component whose job that is.
+
+Two consequences, both deliberate:
+
+- **An event read back off the bus, or out of a retry, has no code.** That is correct
+  rather than tolerable: a code that has waited out a retry delay is expired, and
+  re-showing a dead code is worse than showing nothing. The handler mints a fresh one
+  if it has to, and the store refuses to overwrite a live one (§11.3).
+- **`raw` is not verbatim for a challenge.** The mock puts the code in the webhook
+  body, and `raw` goes to the ledger — so the adapter replaces it with `[redacted]`.
+  There is precedent: Stripe's adapter collapses expanded objects back to their ids
+  (§8.5). Both are the same judgement. `raw` exists to reconstruct what a provider
+  said, not to keep everything it happened to include. What survives is the auditable
+  fact — a code *was* delivered — without the code.
+
+`tests/test_challenge_events.py` holds each sink separately and then drives a real
+signed delivery through the whole receiver and reads the ledger row back, because the
+per-component tests would all pass with a leak in the wiring between them.
+
+### 11.3 The deadline is the provider's, and the store is create-only
+
+Two decisions that only look small.
+
+**Whose deadline.** Both providers that publish a challenge also date it: Lithic's
+`challenge` object carries `expiry_time` (their guide says "typically within 10
+minutes"), and the mock's extension mirrors it. So `CardEvent` gained
+`challenge_expires_at` and the service prefers it over any configured value. A code
+that outlives its challenge is worse than no code: the cardholder enters it and is
+declined, having been shown something by us. `OTP_TTL_SECONDS` is only the fallback
+for a provider that dates nothing, and `OTP_MAX_TTL_SECONDS` is a ceiling — a
+backstop against a payload claiming a week, deliberately set above any real
+provider's deadline so that capping never expires a live challenge, which would be
+the same bug in the other direction.
+
+**Create-only.** `OtpStore.remember` uses `SET … NX`, and that is the whole
+idempotency story for this consumer. The handler can run more than once: dispatch
+fails and the retry queue re-runs it, or a second worker drains the same item. An
+overwritten code would silently stop being the one the cardholder has already read
+and is typing in — a failure with no error and no log line. So the first write wins,
+and the caller is told which happened, because it does something different with each:
+
+- `STORED` — worth a ledger row and a push;
+- `ALREADY_KNOWN` — a retry doing no harm, but the ledger row is still *attempted*
+  (see below);
+- `EXPIRED` — a challenge that arrived dead, which deserves saying out loud.
+
+**The order is store, then ledger, and a retry re-attempts both.** A run that stores
+the code and dies before writing its row has to converge, so `ALREADY_KNOWN` is not
+treated as "nothing to do". The reverse order would be worse: a ledger row claiming a
+code was delivered, and no code.
+
+Redis owns the expiry rather than a sweeper of ours, which is what makes the deadline
+trustworthy — it holds whether or not anything of ours ever runs again. The cost is
+that the sorted-set index of open challenges expires *independently*, because Redis
+has no per-member TTL. An evicted code therefore leaves an entry pointing at nothing.
+That is not designable-away and is the normal state after an eviction, so reads treat
+the code as authoritative and prune the index as they pass — reading is the only
+operation that finds out.
+
+### 11.4 "Extracts/derives" describes two providers, not a fallback
+
+SPEC.md §6.2 says the service "extracts/derives the code". Reading what the two
+providers actually send turned that into two real paths:
+
+- **the mock is ACS-orchestrated.** Its challenge carries `otpCode`, because the
+  simulator plays the party that generated it. So there is a code to extract — and it
+  is a secret arriving in a webhook body, which is what makes §11.2 necessary rather
+  than theoretical.
+- **Lithic is customer-orchestrated.** Their challenge object is
+  `{challenge_method_type, start_time, expiry_time, app_requestor_url}` and carries no
+  code, and that is not an omission: "Your organization delivers the challenge to the
+  cardholder through your chosen channel"
+  (https://docs.lithic.com/docs/3ds-challenge-flow). At the moment their webhook
+  arrives no code exists anywhere, because the card program is the party that makes
+  one. **Deriving is the protocol.**
+- **Stripe sends no challenge at all** (§8.8), so it never reaches this path.
+
+`OtpChallenge.derived` records which happened, because the two are different objects:
+one is a value we relay, the other is a value we would have to verify ourselves. It
+is also the honest thing to show in the modal.
+
+Minted with `secrets`, not `random` — a predictable code is not a second factor — and
+zero-padded, because a leading zero is part of a six-digit code and stripping it
+produces a five-digit one the cardholder cannot enter.
+
+### 11.5 Push is pub/sub, and that is because of §11.2
+
+SPEC.md §2 lists Redis for "OTP delivery pub/sub" and §6.3 asks for polling **and** a
+WebSocket. The service already has a message bus — Redis Streams behind the
+`EventBus` interface — and the push channel deliberately does not use it.
+
+A stream entry is durable by design: that is what makes a consumer resumable and a
+Kafka implementation a drop-in (§2.3). Publishing a code onto it would put the one
+value that has a deadline into the one store built to ignore deadlines. Pub/sub keeps
+nothing — a message reaches whoever is listening at that instant and is then gone —
+and here that is the requirement rather than a limitation to work around.
+
+Having no retention is also what makes §6.3's ordering true rather than stylistic:
+**polling is the contract, push is a courtesy.** A client that is not connected
+misses the message and finds the challenge on its next `GET /otp/pending`. So nothing
+in `app/otp/push.py` retries, acknowledges or persists; those would all be attempts
+to make a fire-and-forget channel reliable, which is what the poll endpoint already
+is.
+
+Two details that follow:
+
+- **The socket sends exactly what the poll endpoint returns**, one challenge at a
+  time, so a client handles both paths with one code path and deduplicates on
+  `challenge_id` without caring which arrived first.
+- **What is already open is sent on connect.** A socket opened a second after the
+  webhook landed would otherwise show nothing until the *next* challenge, and there
+  is no next one — the cardholder would sit in front of a payment they cannot confirm
+  with the code in the store the whole time.
+
+One channel per card, and a challenge naming no card gets a channel of its own rather
+than sharing one: "no card" is not a card id, and collapsing them would deliver a
+challenge to a subscriber who asked for something else.
+
+**A trap worth recording.** redis-py delivers the `SUBSCRIBE` acknowledgement as an
+ordinary message, so a caller's first `get_message(ignore_subscribe_messages=True)`
+consumes it and answers `None` — whether or not a real message was queued behind it.
+That makes "assert nothing was pushed" pass when something was: silent in exactly one
+direction. `subscription()` now reads the acknowledgement before yielding, and the
+negative tests were checked against a deliberately broken implementation to confirm
+they can fail. One read and not a drain, because Redis does not deliver on a
+subscription it has not confirmed, so draining until an acknowledgement appeared would
+discard a challenge if that ever stopped being true.
+
+**A second trap, in the tests rather than the code.** Starlette 1.3 wraps an included
+router in an `_IncludedRouter` that exposes neither `path` nor `routes`, so
+`{route.path for route in app.routes}` reports the four docs endpoints and nothing
+else — a "is this route wired up?" test written that way passes vacuously.
+`tests/support.routed_paths` walks recursively through `original_router`.
+`app.openapi()` is no alternative: WebSocket routes are absent from an OpenAPI schema
+by definition, and the socket is the thing being checked.
+
+### 11.6 The one endpoint that hands out a code, and what the demo does not have
+
+`GET /otp/pending` returns the code. That is the point — SPEC.md §6.4's modal shows it
+with a copy button — and it is worth naming as the single place in the service where
+the value §11.2 works to contain is deliberately handed out.
+
+What this demo does not have is a **caller identity**. There is no auth on this API at
+all, so `card_id` is accepted from the query string where a real deployment would
+derive it from the session. That is a production-path item rather than an oversight,
+and the shape that belongs here already exists in the spec: SPEC.md §9.2's PSE-style
+reveal, where the backend mints a short-lived single-use token and the client exchanges
+it for the sensitive value. The OTP endpoint is the same problem.
+
+`seconds_remaining` travels beside `expires_at` so the countdown does not depend on
+the client's clock, which is the one clock this service cannot vouch for.
+
+### 11.7 Approve/decline, and where a provider's docs disagree with themselves
+
+SPEC.md §6.5: "Approve/decline response posted back through the adapter where the
+sandbox supports it; otherwise ledgered as `responded` with the payload that would be
+sent." Two paths, and the difference is a **capability** rather than an error — so it
+is expressed in the type system rather than in a lookup table of provider names:
+
+```python
+async def respond_to_challenge(self, challenge_id, decision) -> ChallengeResponse:
+    raise ChallengeResponseUnsupported(self.provider_id)
+```
+
+Non-abstract, with `webhook_event_id` as the precedent (§3.3). Both alternatives were
+worse. Making it abstract would force Stripe's adapter to implement a method for an
+endpoint that does not exist — precisely the "one file per issuer" tax phase 4 exists
+to disprove. Leaving it off the interface would make `app/otp/` reach into a concrete
+adapter to ask whether it could respond, which is the coupling
+`test_module_boundaries.py` exists to prevent.
+
+**Lithic really has the endpoint**, which is what makes them the "where the sandbox
+supports it" case: `POST /v1/three_ds_decisioning/challenge_response`, the other end
+of the `three_ds_authentication.challenge` webhook. Three findings about it, and the
+first two are the reason to read a provider's embedded OpenAPI rather than the prose
+on the same page:
+
+1. **The decline value is `DECLINE_BY_CUSTOMER`, not `DECLINE`.** The reference page's
+   summary says one; the `challenge-response` schema's `enum` in the OpenAPI document
+   that same page embeds says the other. The schema is the wire format. This is not
+   "the docs are wrong" — it is the same lesson as Wormhole's Testnet/Devnet columns
+   (§10.1): where a document says two things, the authoritative half is the
+   machine-readable one, and sending the wrong value is a 400 on a challenge with
+   minutes to live.
+2. **Success is 200 with no body at all** — "Challenge Response was received and
+   forwarded to the ACS", with no response content. The client treated a bodyless
+   success as a malformed one, since every other endpoint here answers with a JSON
+   object. Fixed with an opt-in `allow_empty_body` per call rather than a blanket
+   relaxation: a *list* endpoint that suddenly answered 200 with nothing would then
+   read as "no records", which is a wrong answer rather than an error.
+3. **Their 404 has no body either**, and that one is not in the docs at all. The
+   reference describes it as "The provided token was not found", which reads like an
+   error object; the sandbox sends nothing. Recorded from the live sandbox with
+   `record_lithic_fixtures.py --only-challenge-error`, which is read-only and creates
+   nothing — the flag exists because a full walk creates cards and simulates
+   transactions, and re-recording the whole set to add one fixture moves every other
+   one with it (§10.7's Solana trap). Beyond the shape, the round trip proves three
+   things that were previously read off a document: the path exists at this API
+   version, a bare `Authorization` header authenticates it, and the body is accepted
+   as JSON — a malformed one would be a 400, not a 404.
+
+What could **not** be recorded, stated plainly: the 422, and the success. Both need a
+real challenge, and raising one needs the program configured for Out of Band
+challenges — a dashboard setting, not an API call. The 422 body in the tests is built
+from their documented `challenge-response-unprocessable` schema and the test says so,
+because a documented shape is weaker evidence than a recorded one (§8.10, and the
+whole of §10.1).
+
+**The mock is where the round trip actually runs.** Its simulator now keeps challenge
+state and enforces what a real ACS does and a naive mock would not: a challenge is
+answerable exactly once, and only before it expires. Without those two refusals the
+adapter above it would have nothing to translate, and a duplicate answer would look
+like a success.
+
+**The order is deliver, ledger, forget.** Consuming the challenge before the row was
+written would lose the record of a decision that had already reached the provider, and
+that record is the point of a ledger here. A crash between the row and the forget
+leaves the challenge answerable again, which the provider then refuses as
+already-answered — visible and diagnosable, and much the better half of the trade. A
+provider failure that is neither not-found nor already-answered propagates as a 502
+and consumes nothing, so the cardholder can try again rather than losing a live
+challenge to our bookkeeping.
+
+For a provider with nowhere to send the decision, the ledger row carries
+`delivered: false` and a `would_send` of our **normalized** decision rather than a
+provider-shaped body. Deliberately: a provider with no such endpoint has no body shape
+to record, and inventing one would be recording a request that could not exist.
+
+### 11.8 What phase 7 could not verify
+
+Named here rather than left implicit, in the same spirit as §10.6.
+
+**No live 3DS challenge from a real provider.** Lithic's sandbox cannot raise one
+without the program configured for Out of Band challenges, and Stripe publishes no
+issuer-facing challenge at all. So the end-to-end path — real webhook, real code, real
+approve — runs only against the mock's simulator, which is exactly what SPEC.md §6.1
+allows for ("Stripe/Lithic simulation, or the mock adapter's simulator"). What is
+verified against Lithic is the request shape, the auth, and the two error mappings,
+one of them recorded.
+
+**The WebSocket is not tested through a real handshake.** Starlette's `TestClient`
+runs the app in an event loop of its own and `redis.asyncio` connections belong to the
+loop that opened them, so the two cannot share a client. The endpoint is a plain async
+function and is called directly with a fake socket; accept/send/disconnect is
+Starlette's to get right, and `routed_paths` checks the route is served.
+
+**Nothing here has been driven from the mobile client**, which is phase 8. The modal
+in SPEC.md §6.4 is a consumer of `GET /otp/pending` and `/ws/otp`, and the response
+shape was designed for it — one message per challenge, `seconds_remaining` for the
+countdown, `derived` so the copy can be honest about where the code came from — but no
+client has exercised it yet.

@@ -545,6 +545,96 @@ form drops the account indices, and those indices are the instruction's ABI.
 
 ---
 
+## Phase 7 — the 3DS / OTP service
+
+SPEC.md §6, end to end: a challenge webhook becomes a code in Redis, reaches the app by
+polling **and** over a WebSocket, and comes back as an approve or a decline.
+
+### The whole flow in one command
+
+```bash
+docker compose up -d postgres redis
+cd backend && source .venv/bin/activate
+alembic upgrade head                       # once, if you have not
+
+python scripts/demo_phase7.py              # the whole §6 flow
+python scripts/demo_phase7.py --decline    # the other answer
+python scripts/demo_phase7.py --unsupported  # a provider with nowhere to send it (§6.5)
+python scripts/demo_phase7.py --expired    # a challenge that arrives dead
+```
+
+**No credentials and no network.** The provider is `gnosis_pay_mock`, whose simulator
+signs its own deliveries and keeps its own challenge state — which is what SPEC.md §6.1
+means by "or the mock adapter's simulator". Everything else is the code the running
+service uses: the receiver, the consumer, the store, the push channel, the response path.
+
+Two things in the output are the phase's findings made visible:
+
+- **the ledger never holds the code.** The challenge arrives with `otpCode` in its body,
+  and the ledger row shows `[redacted]`. The script prints both and then says whether the
+  code appears anywhere in the rows it just wrote (ARCHITECTURE §11.2).
+- **the push and the poll carry the same thing.** A listener sees the challenge the moment
+  it is stored; a client that was not connected finds it in `GET /otp/pending`. Push is a
+  courtesy, polling is the contract (§11.5).
+
+### Over HTTP
+
+The demo drives the pipeline in-process. To watch the same thing through the running
+service, raise a challenge with the demo and poll the API — both talk to the same Redis:
+
+```bash
+uvicorn app.main:app --port 8000                        # terminal A
+python scripts/demo_phase7.py --leave-open              # terminal B
+```
+
+`--leave-open` stops before answering and prints the challenge id, so there is something
+for the API and the socket to show. Then:
+
+```bash
+curl -s localhost:8000/otp/pending | jq                     # what is open
+curl -s -X POST localhost:8000/otp/gnosis_pay_mock/3ds_000001/respond \
+     -H 'content-type: application/json' -d '{"decision":"approve"}' | jq
+```
+
+The provider is in the path because the store is keyed on the pair: two providers
+numbering their challenges from 1 is normal, and a challenge id alone is ambiguous.
+`GET /otp/pending` returns both.
+
+A challenge that is not open answers **404**, and that covers three cases which are one
+fact from a client's side: never delivered, expired, or already answered. A provider with
+no challenge-response endpoint answers **200** with `delivered: false` — the decision is
+ledgered with what would have been sent, which is SPEC.md §6.5's fallback rather than a
+failure.
+
+### The WebSocket
+
+```bash
+# any WebSocket client; wscat is convenient
+npx wscat -c 'ws://localhost:8000/ws/otp'
+npx wscat -c 'ws://localhost:8000/ws/otp?card_id=crd_000001'
+```
+
+Whatever is already open arrives on connect, then each new challenge as it is stored. The
+messages are the same shape `GET /otp/pending` returns, one challenge per message, so a
+client handles both paths with one code path and deduplicates on `challenge_id`.
+
+Nothing is read from the socket: approve/decline is the HTTP call above, because a
+cardholder whose socket has dropped still has to be able to answer.
+
+### Re-recording the challenge-response fixture
+
+```bash
+python scripts/record_lithic_fixtures.py --only-challenge-error
+```
+
+Read-only and creates nothing — unlike a full walk, which creates cards and simulates
+transactions. The flag exists because re-recording the whole set to add one fixture moves
+every other one with it (ARCHITECTURE §10.7). What that one call establishes is in §11.7,
+along with what the sandbox *cannot* be made to produce: a real challenge needs the
+program configured for Out of Band challenges, which is a dashboard setting.
+
+---
+
 ## Running the backend on the host instead
 
 Useful for the test suite and for iterating without rebuilds.
