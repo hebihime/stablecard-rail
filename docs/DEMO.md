@@ -419,6 +419,103 @@ Read-only and free — no credentials at all. `backend/tests/fixtures/solana/REA
 says which files are recorded and which are derived, and which of them exist because
 the obvious guess turned out to be wrong.
 
+**Pass `--only <name>` when adding a fixture.** A full re-record moves
+`signatures_for_deposit_account`, which asks for the newest five signatures on a real
+account and therefore answers with whatever is current. Neither `until` nor `before`
+can pin it, and `test_solana_watcher.py` reads specific entries out of it — a blind
+re-record turned 29 tests red once.
+
+---
+
+## Phase 6 — the real bridge (Wormhole, Solana devnet -> BSC testnet)
+
+Phase 5's pipeline runs on a simulator, and SPEC.md §5.2 keeps it that way: a
+walk-through must not be able to fail because somebody else's testnet is down. Phase
+6 adds a real protocol behind the same interface, opt-in per run.
+
+### Verify the route, with no credentials
+
+```bash
+python scripts/demo_phase6.py
+```
+
+Six read-only calls across two chains, and it prints what each answered:
+
+```
+the source chain — https://api.devnet.solana.com
+  OK core bridge deployed               3u8hJUVTA4jH… executable=True
+  OK token bridge deployed              DZnkkTmCiFWf… executable=True
+  OK USDC mint exists                   4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+     the emitter a VAA will name: 4yttKWzRoNYS2HekxDfcZYmfQqnVWpKiJ8eydYRuFRgs
+
+the destination chain — https://data-seed-prebsc-1-s1.bnbchain.org:8545
+  OK chain id                           node says 97, configured 97
+  OK trusts chain 1's bridge            3b26409f8aaded3f…
+  OK wrapped USDC attested              0x51a3cc54ea30da607974c5d07b8502599801ac08
+     destination guardian set: 0
+```
+
+The third destination line is the one that matters most: BSC testnet's Token Bridge
+trusts exactly the emitter derived from the Solana program. If it did not, every
+redemption would revert. The script also replays a recorded VAA — showing its
+double-keccak digest agreeing with the explorer's — and derives a message account
+twice, which is where `submit`'s idempotency comes from.
+
+**If a check fails**, docs/ARCHITECTURE.md §10.1 says what each one proves. A failure
+on "token bridge deployed" means Wormhole retired the devnet deployment and the route
+needs re-researching; one on "wrapped USDC attested" means somebody would have to run
+`create_wrapped` first.
+
+### Send a real transfer
+
+This spends real testnet money and needs two funded keys:
+
+```bash
+# devnet USDC + a little SOL for fees, in whatever form solana-keygen or a wallet gives you
+SOLANA_DEPOSIT_KEYPAIR=...
+# test BNB, only to pay gas — it never holds the funds
+EVM_REDEEMER_PRIVATE_KEY=...
+
+python scripts/demo_phase6.py --transfer --amount 100000   # 0.100000 USDC
+```
+
+Faucets: devnet SOL from `solana airdrop 1 <address> --url devnet`, devnet USDC from
+`faucet.circle.com`, test BNB from `testnet.bnbchain.org/faucet-smart`. The wrapped
+USDC lands at the redeemer's own address on BSC testnet, so the balance is visible in
+any explorer.
+
+Without both keys the script says which is missing and stops. **This mode has not
+been run** — see ARCHITECTURE §10.6 for exactly what that leaves unverified.
+
+### Point the funding pipeline at it
+
+```bash
+BRIDGE_PROVIDER=wormhole python scripts/run_funding_worker.py --once
+# or, per run:
+python scripts/run_funding_worker.py --bridge wormhole --once
+```
+
+The engine is unchanged and cannot tell the two bridges apart, which was the point of
+the phase. Both keys are checked at start-up rather than at the first transfer, so a
+misconfigured worker fails immediately instead of looking healthy for an hour.
+
+The reconciler's threshold matters more here than with the simulator:
+`RECONCILER_STUCK_AFTER_SECONDS` has to exceed Solana finality plus guardian quorum
+plus BSC inclusion, or a healthy transfer gets treated as stuck on every pass
+(ARCHITECTURE §10.2, point 5).
+
+### Re-recording the bridge fixtures
+
+```bash
+python scripts/record_wormhole_fixtures.py             # guardian API + the source transaction
+python scripts/record_wormhole_fixtures.py --discover  # re-pin the VAA if it ages out
+python scripts/record_evm_fixtures.py                  # BSC testnet answers
+```
+
+Both are read-only and keyless. `backend/tests/fixtures/wormhole/README.md` explains
+why the source transaction is recorded in `json` rather than `jsonParsed` — the parsed
+form drops the account indices, and those indices are the instruction's ABI.
+
 ---
 
 ## Running the backend on the host instead

@@ -29,7 +29,7 @@ pass, lint and types are clean, and the phase is demo-able.
 | 3 | Lithic adapter | **done** |
 | 4 | Stripe Issuing adapter | **done** |
 | 5 | Solana watcher + simulated bridge + auto top-up | **done** |
-| 6 | Real bridge adapter | — |
+| 6 | Real bridge adapter | **done** |
 | 7 | 3DS / OTP service | — |
 | 8 | Mobile app | — |
 | 9 | Fireblocks signer (stretch) | — |
@@ -47,6 +47,9 @@ docker compose exec backend python scripts/demo_phase2.py   # issuers + webhooks
 
 # Phase 3 talks to Lithic's sandbox, so it needs a free sandbox key in .env
 cd backend && python scripts/demo_phase3.py                  # a real fiat-rail issuer
+
+cd backend && python scripts/demo_phase5.py                  # the funding pipeline, no network
+cd backend && python scripts/demo_phase6.py                  # the real bridge, verified live
 ```
 
 Full walk-through — card lifecycle over HTTP, signed webhook deliveries, duplicate
@@ -61,7 +64,9 @@ backend/app/
 │               ExternalError (the retryable marker both subsystems share)
 ├── chain/      Solana deposit watcher + slot cursor, JSON-RPC client,
 │               BridgeProvider + deterministic simulator, TransactionSigner,
-│               associated-token-address derivation
+│               associated-token-address derivation,
+│               bridge/wormhole/ (VAAs, the hand-built transfer instruction,
+│               the guardian API, the redeemer) and evm/ (JSON-RPC, ABI, signer)
 ├── funding/    FundingState + transition table, machine.advance(), deposit intake,
 │               the auto top-up engine, the reconciler, deposit routes,
 │               the settlement consumer
@@ -83,6 +88,27 @@ backend/app/
   rather than asserted: a test parses the import graph and fails if anything outside
   `issuers/` reaches past `base.py` and the registry, or if an adapter reaches into
   `funding/`, `ledger/`, `webhooks/` or `api/`.
+- **The real bridge is Wormhole, Solana devnet → BSC testnet**, behind the same two
+  calls the simulator answers — and the engine needed no change to use it, which was
+  the interface's whole bet. deBridge, which SPEC.md §5.2 names first, has no testnet
+  and says so in its own FAQ; that limitation is structural to every solver-filled
+  route, since nobody funds market-maker inventory on a testnet. Lock-and-mint needs
+  no funded third party, so it is the kind of protocol a testnet can host.
+  `scripts/demo_phase6.py` proves the route exists in six read-only calls against both
+  chains, and needs no credentials.
+- **The route was established by probing chains, not by reading tables.** Wormhole's
+  supported-networks page marks a "Devnet" column unsupported for Solana — that is
+  their local Tilt network, and read literally it is the wrong answer. What the RPC
+  says: both programs deployed and executable on devnet, an emitter derived locally
+  that matches what the explorer reports *and* what BSC testnet's Token Bridge trusts,
+  and a wrapped USDC already attested. The Solana instruction is hand-built (no Python
+  binding exists) and its bytes are asserted **byte-for-byte** against a real transfer
+  the chain accepted.
+- **Idempotency is constructed, because Wormhole has none.** A duplicate `submit`
+  would lock a second amount, so the transfer's message account is derived from the
+  order reference — from a *signature* over it, so the address is reproducible by us
+  and unguessable by anyone else — and a retry finds the account already on chain and
+  reads its sequence back instead of sending again.
 - **`gnosis_pay_mock`** models the Gnosis Pay partner pattern, shaped on their public
   docs: a Safe smart account per user on Gnosis Chain, and funding that is a confirmed
   stablecoin transfer into it rather than an API call — so `fund_card` verifies and

@@ -1959,3 +1959,148 @@ or a healthy transfer gets treated as stuck on every pass — the §9.16 failure
 arriving through a different door. The simulator's `SIMULATED_BRIDGE_LATENCY_SECONDS`
 existed to make this tunable before it was real; phase 6 is where the number has to
 match a protocol instead of a config knob.
+
+### 10.3 A hand-built instruction, and why that is defensible
+
+Wormhole's SDK is TypeScript. There is no Python binding for its Solana programs,
+so `transfer_native` is built here byte by byte: 55 bytes of little-endian Borsh
+and seventeen accounts in a fixed order. That is normally a bad idea, and what
+makes it acceptable is where the layout came from.
+
+**It came off a transaction the chain accepted.** The recorded VAA
+(`tests/fixtures/wormhole/`) has a `txHash`, and that transaction is a real
+`transfer_native` on the exact program this adapter calls. Recorded in `json`
+encoding rather than `jsonParsed`, because the parsed form drops the per-instruction
+account *indices* and those indices are the ABI. Three tests then close the loop:
+
+- `transfer_native_data` rebuilt from the recorded instruction's own field values
+  is **byte-for-byte identical** to it;
+- the seventeen derived accounts are the seventeen the transaction used, in order;
+- every writable flag matches.
+
+All eight PDA derivations reproduced the recording on the first attempt, which is
+weak evidence that the seeds were guessed well and strong evidence that they are
+right — a wrong seed produces a valid-looking address that exists nowhere, and the
+chain reports that as a program error with nothing in it about seeds.
+
+**Two things the recording taught that no documentation mentioned.** A transfer
+needs an SPL `approve` to the `authority_signer` PDA first, for exactly the amount;
+without it the transfer reverts and nothing in the instruction layout hints that the
+approval is missing. And the instruction's amount is the *token's* — `625600000` at
+nine decimals — while the VAA carries `62560000` at eight. That is Wormhole's
+normalization, visible in one pair of recorded numbers instead of taken on trust.
+USDC has six decimals, so nothing this pipeline sends is scaled, and
+`normalized_amount` exists so the day that changes the truncation is a named thing
+rather than a surprise in a reconciliation report.
+
+**One flag in the recording is a red herring**, and it is documented as such in the
+code: the source token account is a signer there, because that transfer wrapped SOL
+through a temporary account whose keypair signed its own creation. An associated
+token account signs nothing. Reading flags off a recording needs that caution
+generally — a transaction's flags are the *union* across its instructions, so an
+account can look writable because a different instruction wrote it. Being generous
+with `mut` is safe on a non-program account; being stingy aborts the transaction.
+
+### 10.4 Idempotency built out of an account address
+
+`BridgeOrder.order_ref` was documented in phase 5 as "our idempotency key… on the
+assumption that a provider would honour it". Wormhole does not have the concept. A
+duplicate `submit` locks a second amount and produces a second VAA, and the engine
+retries `submit` precisely when it cannot tell whether the first call landed — which
+is the most dangerous shape a missing idempotency key can take.
+
+The mechanism is the **message account**. Wormhole's core bridge requires the
+account that will hold the posted message to *sign*, which makes it a keypair rather
+than a PDA — and a keypair this service chooses. So it is derived from the order
+reference: before sending, the adapter reads that address, and if an account is
+already there this order was already submitted and its sequence is read back instead.
+The same read closes the window between sending and being told the send worked,
+because it asks the chain rather than remembering what this process did.
+
+**Derived from a signature, not from a hash of the order id.** The address has to be
+reproducible from the order alone — that is the whole mechanism — *and* unguessable
+by anyone else, because an outsider who could predict it could create the account
+first and make the transfer permanently unsubmittable. A signature over a
+domain-separated payload satisfies both without introducing a second secret to
+configure: Ed25519 signatures are deterministic by construction (RFC 8032), so the
+same signer over the same bytes always produces the same seed, and only the key
+holder can produce it. It also keeps the derivation inside `TransactionSigner`, so
+phase 9's custody service needs no change here — **provided it signs
+deterministically.** One that randomizes signatures would break idempotency rather
+than correctness, and that is worth knowing before wiring one up.
+
+Reading the sequence back needs the posted-message layout, so every offset in it was
+checked against two independent things: the VAA the guardians signed (sequence,
+emitter, consistency level, payload) and the instruction that created it (nonce). An
+account at the derived address that is *not* a posted message is refused rather than
+parsed — it means somebody else created it, and a sequence read out of unrelated
+bytes becomes a `bridge_ref` naming a stranger's transfer.
+
+### 10.5 `status` acts, and `COMPLETED` means the destination says so
+
+The interface has two calls, and with a lock-and-mint bridge one of them has to do
+something. `status` fetches the VAA and, if the guardians have signed and the
+destination has not redeemed, submits the redemption. A `status` that only observed
+would leave every transfer pending forever (§10.2, point 1). §9.2 chose two calls on
+the grounds that anything richer "belongs inside an implementation until a caller
+needs it" — this is that case, and the engine and the reconciler are unchanged, which
+is the strongest evidence available that §9.2's shape was right.
+
+What the three states mean here, precisely, because the money is locked while this
+is being decided:
+
+| State | Means | Does *not* mean |
+| --- | --- | --- |
+| `PENDING` | sent-not-signed, signed-not-redeemed, or redemption-in-flight | nothing has happened |
+| `COMPLETED` | the destination Token Bridge answers `isTransferCompleted` | we submitted a redemption, or a receipt looked good |
+| `FAILED` | the chain reverted and will repeat that | the money is gone |
+
+`isTransferCompleted` is asked **first, always**. It is the authoritative answer to
+"did the money arrive", it costs nothing, and it is what makes the operation
+restartable: a redemption submitted and then lost to a crash or a redeploy is
+discovered by asking rather than by re-sending. It is also the reason a retry does
+not pay gas to fail on a transfer somebody else already delivered.
+
+The digest it is asked with is `keccak256(keccak256(body))` — a **double** keccak.
+Getting that wrong would make every delivered transfer read as undelivered and every
+redemption look like a duplicate, so it has two independent confirmations behind it:
+Wormhole's `Messages.sol`, which computes it under a comment reading *"SECURITY: Do
+not change the way the hash of a VM is computed!"*, and Wormholescan's own `digest`
+field for a real testnet VAA, which the test asserts equality with.
+
+Gas is estimated before anything is signed, which buys a free pre-flight: a
+redemption that cannot succeed reverts there, with the chain's own words, without
+spending. That is where "already completed" and "invalid emitter" surface, and the
+reason is carried into the ledger rather than swallowed — because per §10.2 point 2,
+a refusal is not the same as lost money, and the VAA remains the key to it.
+
+### 10.6 What phase 6 could not verify
+
+Recorded plainly, in the spirit of §8.9.
+
+**No real transfer has been sent.** The route is verified against both chains —
+`scripts/demo_phase6.py` does it in six read-only calls, and it passes — but moving
+devnet USDC through it needs two funded testnet keys that this environment does not
+have: `SOLANA_DEPOSIT_KEYPAIR` with devnet USDC and SOL, and
+`EVM_REDEEMER_PRIVATE_KEY` with test BNB. `--transfer` says which is missing and
+stops rather than half-running. What that leaves unverified is specifically the
+parts a fixture cannot stand in for: that the built transaction is accepted by the
+program (as opposed to being byte-identical to one that was), that the guardians
+sign our message, and that `completeTransfer` succeeds against a VAA of ours.
+
+**The "already completed" revert is a prediction.** `RedemptionRefused` is exercised
+against a real revert — *VM version incompatible*, from the real contract, recorded
+— but the specific revert a duplicate redemption produces has not been seen. Newer
+Wormhole releases use a custom error (`TransferAlreadyCompleted()`) where older ones
+used a string, and the deployed BSC testnet version is unknown. This is why the
+adapter branches on `isTransferCompleted` rather than on a revert reason: the check
+is authoritative and the string is not.
+
+**Nothing has been run against a second guardian set.** Testnet signs with one
+guardian; mainnet has nineteen. The VAA parser handles the count generically and a
+test pins the one-signature case, but a mainnet-shaped VAA has never been through it.
+
+**Finality timing is unmeasured.** §10.2 point 5 says
+`RECONCILER_STUCK_AFTER_SECONDS` has to exceed Solana finality plus guardian quorum
+plus BSC inclusion, and the current default (120s) is a guess that was never a
+measurement. The first real transfer is what turns it into one.
