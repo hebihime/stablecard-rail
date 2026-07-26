@@ -1920,7 +1920,8 @@ than ours, moving to 10004 for a comparison is four variables and a re-run.
 **The mainnet route choice, and a §5.2 assumption that has expired.** §5.2 predicts
 the real product bridges Solana → Gnosis Chain because that is where a Gnosis Pay
 card's Safe lives, and offers deBridge and LiFi as the candidates. Neither serves it
-today, and the third does not either:
+today, and neither do the two others checked since. Each is missing a *different*
+half, which is the tell:
 
 - **deBridge** — no Gnosis Chain in the supported-chains list at all any more. §5.2's
   "deBridge lists Gnosis support" was true when the SPEC was written; it is stale.
@@ -1929,6 +1930,25 @@ today, and the third does not either:
 - **LiFi**, the aggregator §5.2 names as the fallback — `GET /v1/chains` lists Gnosis
   (100) and **no Solana at all**, and a mainnet quote request for Solana USDC → Gnosis
   USDC answers `1002 No available quotes for the requested transfer`.
+
+- **Symbiosis**, a fourth candidate added after jp asked whether the first three were
+  really the whole story — and the most interesting "no" of the four. It lists *both*
+  chains (Solana `5426`, Gnosis `100`) and *both* tokens (Solana USDC, Gnosis
+  `USDC.e`), and a real quote for the pair still answers
+  `This swap is not available … [NoRouteError] No promises provided`. Supporting two
+  chains is not the same as connecting them.
+- **CCTP** is not an option either: Circle has no Gnosis domain, and Gnosis's dollar
+  is `USDC.e` — Ethereum USDC held in Gnosis's own bridge, not natively issued.
+
+**Why the gap exists, which is more useful than the list.** Gnosis Chain's
+stablecoins arrive through its *own* canonical Ethereum bridge: `USDC.e` on Gnosis
+literally is Ethereum USDC locked in the Omnibridge, and a Gnosis Pay card is funded
+in that or in Monerium's EURe. So the general-purpose bridges route to where volume
+and solver inventory are — Ethereum, BSC, Base, Arbitrum — and Gnosis is reached
+*from* Ethereum by a bridge specific to Gnosis. A one-hop Solana → Gnosis route would
+require somebody to fund inventory on a chain whose assets are already defined by a
+different bridge, which is why each provider is missing a different half rather than
+all being missing the same one.
 
 So the honest mainnet answer is that Solana → Gnosis Chain is **a two-hop route**:
 bridge Solana → an EVM chain that both sides support (Wormhole or CCTP into Polygon
