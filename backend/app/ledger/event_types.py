@@ -52,6 +52,20 @@ OTP_UNDELIVERABLE = "otp.undeliverable"
 #: payload is what separates the two.
 OTP_RESPONDED = "otp.responded"
 
+# --- the PSE-style card reveal (phase 8) -----------------------------------
+#: A reveal token was issued for a card. Worth a row on its own, before anything is
+#: revealed: SPEC.md §7 asks for "every card action", and asking to see a card is
+#: an action whether or not the token is ever spent. An unspent token in the ledger
+#: is also the only trace a cardholder who changed their mind leaves.
+REVEAL_TOKEN_MINTED = "reveal.token_minted"
+#: A token was exchanged and the card's details were rendered. Carries no token,
+#: no PAN and no CVV — there is no PAN anywhere in this system to carry.
+REVEAL_GRANTED = "reveal.granted"
+#: A token was presented and refused. `reason` separates a replay, which names a
+#: token we really did mint, from an unrecognised one, which is somebody guessing.
+#: The client is told neither (docs/ARCHITECTURE.md §12.3).
+REVEAL_REJECTED = "reveal.rejected"
+
 #: Namespace for everything a provider told us, as opposed to something we did.
 PROVIDER_PREFIX = "provider"
 
@@ -82,6 +96,9 @@ __all__ = [
     "OTP_RESPONDED",
     "OTP_UNDELIVERABLE",
     "PROVIDER_PREFIX",
+    "REVEAL_GRANTED",
+    "REVEAL_REJECTED",
+    "REVEAL_TOKEN_MINTED",
     "TRANSFER_IGNORED",
     "WEBHOOK_DEAD_LETTERED",
     "provider_event",

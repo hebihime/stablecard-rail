@@ -20,6 +20,7 @@ from app.issuers.base import (
     FundingRejectedError,
     IllegalCardTransitionError,
     IssuerError,
+    RevealUnsupported,
 )
 from app.issuers.registry import UnknownProviderError
 from app.webhooks.receiver import SignatureRejected
@@ -49,6 +50,13 @@ async def _funding_rejected(_request: Request, exc: Exception) -> JSONResponse:
     return _problem(409, "funding_rejected", str(exc))
 
 
+async def _reveal_unsupported(_request: Request, exc: Exception) -> JSONResponse:
+    # 501, not the 502 an `IssuerError` otherwise gets: nothing failed upstream. The
+    # provider has no reveal path we use, which is a fact about the integration and
+    # not an outage, so a client should stop asking rather than retry.
+    return _problem(501, "reveal_unsupported", str(exc))
+
+
 async def _signature_rejected(_request: Request, exc: Exception) -> JSONResponse:
     # No detail about which part failed: a caller who cannot sign has no business
     # learning how close they got.
@@ -68,5 +76,6 @@ def install_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CardholderNotFoundError, _not_found)
     app.add_exception_handler(IllegalCardTransitionError, _illegal_transition)
     app.add_exception_handler(FundingRejectedError, _funding_rejected)
+    app.add_exception_handler(RevealUnsupported, _reveal_unsupported)
     app.add_exception_handler(SignatureRejected, _signature_rejected)
     app.add_exception_handler(IssuerError, _issuer_error)

@@ -34,6 +34,7 @@ from app.api.cards import router as cards_router
 from app.api.errors import install_exception_handlers
 from app.api.ledger import router as ledger_router
 from app.api.otp import router as otp_router
+from app.api.reveal import router as reveal_router
 from app.api.webhooks import router as webhooks_router
 from app.core.config import get_settings
 from app.core.db import get_session, get_sessionmaker
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(webhooks_router)
     app.include_router(ledger_router)
     app.include_router(otp_router)
+    app.include_router(reveal_router)
     return app
 
 

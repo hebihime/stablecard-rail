@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     #: so it is what a cardholder expects to be asked for.
     otp_code_digits: int = 6
 
+    # --- the PSE-style card reveal (SPEC.md §9.2) --------------------------
+    #: Lifetime of the token our backend mints for a client to exchange. Sixty
+    #: seconds because that is what Gnosis Pay's own ephemeral token gets, and the
+    #: pattern this models is theirs — a longer one here would be a bearer
+    #: credential outliving the provider credential it stands in for.
+    reveal_token_ttl_seconds: int = 60
+    #: How long a spent token is remembered *as spent*, so a replay is reported as a
+    #: replay rather than as an unknown token. The two are different incidents to
+    #: whoever reads the ledger, and indistinguishable once the entry is gone.
+    #: Never affects what a client is told — both answer 404.
+    reveal_replay_memory_seconds: int = 900
+
     # --- the worker loop ---------------------------------------------------
     #: How long a hop is left alone before its *first* attempt. Retries are the
     #: reconciler's business and are paced by its backoff instead.
