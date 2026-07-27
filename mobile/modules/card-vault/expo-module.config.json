@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["CardVaultModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.cardvault.CardVaultModule"]
+  }
+}

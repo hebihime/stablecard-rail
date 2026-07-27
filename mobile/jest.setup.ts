@@ -12,6 +12,46 @@
 // against predictable "randomness" would say nothing about key generation.
 import { webcrypto } from 'node:crypto';
 
-if (globalThis.crypto === undefined) {
-  Object.defineProperty(globalThis, 'crypto', { value: webcrypto });
+// `subtle` and not just `crypto`: JSDOM supplies a `crypto` object with
+// `getRandomValues` and no `subtle` at all, so testing for the outer object would
+// leave the vault's own availability check answering "no primitives here" and every
+// encryption test asserting the fallback path instead of the real one.
+if (globalThis.crypto?.subtle === undefined) {
+  Object.defineProperty(globalThis, 'crypto', { value: webcrypto, configurable: true });
+}
+
+// `structuredClone`, for the same reason and with a wrinkle worth recording.
+//
+// IndexedDB stores values by structured clone, and that is exactly why the web
+// vault can hold a non-extractable `CryptoKey` at all — the handle survives, the key
+// material never becomes a JavaScript value. JSDOM's global does not expose
+// `structuredClone`, so `fake-indexeddb` throws on the first write.
+//
+// The real implementation is nonetheless *present*: Jest's JSDOM environment builds
+// its global object inside Node's own V8 context, so the function exists on the
+// context while being absent from the global the tests see. `runInThisContext`
+// reaches it. That matters rather than being a trick — a hand-written shim would
+// have to decide what to do with a `CryptoKey`, and the test asserting that keys
+// survive IndexedDB would then be asserting the shim's behaviour instead of the
+// platform's.
+// `TextEncoder`/`TextDecoder`, absent from JSDOM's global for the same reason.
+// Node's are the same implementation a browser has, so this changes no behaviour.
+import { TextDecoder, TextEncoder } from 'node:util';
+
+for (const [name, value] of [
+  ['TextEncoder', TextEncoder],
+  ['TextDecoder', TextDecoder],
+] as const) {
+  if ((globalThis as Record<string, unknown>)[name] === undefined) {
+    Object.defineProperty(globalThis, name, { value, configurable: true });
+  }
+}
+
+if ((globalThis as { structuredClone?: unknown }).structuredClone === undefined) {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const vm = require('node:vm') as typeof import('node:vm');
+  Object.defineProperty(globalThis, 'structuredClone', {
+    value: vm.runInThisContext('structuredClone'),
+    configurable: true,
+  });
 }
