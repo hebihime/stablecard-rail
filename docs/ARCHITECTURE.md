@@ -2493,7 +2493,7 @@ on the same page:
 
 What could **not** be recorded, stated plainly: the 422, and the success. Both need a
 real challenge, and raising one needs the program configured for Out of Band
-challenges — a dashboard setting, not an API call. The 422 body in the tests is built
+challenges — **which is not a self-serve setting at all**, see §11.9. The 422 body in the tests is built
 from their documented `challenge-response-unprocessable` schema and the test says so,
 because a documented shape is weaker evidence than a recorded one (§8.10, and the
 whole of §10.1).
@@ -2541,3 +2541,65 @@ in SPEC.md §6.4 is a consumer of `GET /otp/pending` and `/ws/otp`, and the resp
 shape was designed for it — one message per challenge, `seconds_remaining` for the
 countdown, `derived` so the copy can be honest about where the code came from — but no
 client has exercised it yet.
+
+### 11.9 Why no live Lithic challenge, established by probing rather than reading
+
+§11.8 records that no live 3DS challenge could be raised. This section records how that
+was established, because the first two answers were wrong and the sequence is the useful
+part.
+
+**Their docs say it is not self-serve.** Both challenge-flow pages say the same thing:
+"Contact your Implementation Manager (for implementing programs) or your Customer Success
+Manager (for live programs)", and "Organizations must first configure their base
+decisioning model before enabling challenge orchestration". A self-serve sandbox account
+has neither contact, and there is no dashboard equivalent — so an earlier draft of §11.7
+calling it "a dashboard setting" was wrong, and is corrected.
+
+**There is a documented way to force one, and it is hidden in a field description.** The
+`simulate-authentication-request` schema says of `merchant.name`: "Merchant descriptor,
+corresponds to `descriptor` in authorization. **If CHALLENGE keyword is included, Lithic
+will trigger a challenge.**" That appears in neither challenge guide, only inside the
+embedded OpenAPI — the same lesson as §11.7's `DECLINE_BY_CUSTOMER`.
+
+**What the sandbox actually does with it**, from `POST /v1/three_ds_authentication/simulate`
+against a real card:
+
+| `merchant.name` | `authentication_result` | `challenge_orchestrated_by` |
+| --- | --- | --- |
+| `COFFEE BAR` | `SUCCESS` | `NO_CHALLENGE` |
+| `CHALLENGE COFFEE BAR` | `DECLINE` | `NO_CHALLENGE` |
+
+So the keyword **is** honoured — the decision changes — but the challenge is never
+orchestrated. `challenge_metadata` stays `null` and no
+`three_ds_authentication.challenge` webhook is produced, which is exactly what "challenge
+flow orchestration is not configured for this program" looks like from outside.
+
+**One hypothesis was worth eliminating and was eliminated.** Their guide says: "ensure
+that the account holder associated with the card transaction has a valid phone number
+configured to receive the OTP code via SMS." The 3DS record's cardholder block comes back
+with `phone_number_mobile`, `_home` and `_work` all `null` and `name` defaulted to `"John
+Smith"` — so the obvious reading was a missing number. It is not:
+
+- the account holder's identity *does* carry `phone_number: "15555550123"`;
+- creating one with `+15555550123` (E.164, in case the missing `+` was the problem)
+  changed nothing — same `DECLINE`, same null mobile, same `"John Smith"`.
+
+Lithic's 3DS view of the cardholder is simply not populated from the account holder in
+this sandbox, regardless of what we store. So the gate is the program configuration, not
+the data.
+
+**A correction worth recording as method.** The first attempt at that hypothesis read
+`GET /v1/account_holders/{token}` as "Identity not found" and concluded the KYC-exempt
+workflow creates no identity at all. That was our own bug in the probe:
+`create_cardholder` deliberately returns the **account** token as `cardholder_id` (cards
+are created against the account) and keeps the account-holder token in `raw`, so the probe
+looked the holder up by the wrong id. Two ids that are both opaque strings, one of which
+answers 404 for the other — the same class of mistake as §9.8's two deposit addresses. It
+is in this document because the wrong conclusion was reached first, and reaching it did
+not feel like guessing.
+
+**What would close the gap.** Ask Lithic to enable Out of Band challenge orchestration on
+the sandbox program. Once they have, the whole path is already built and needs no code:
+simulate with `CHALLENGE` in the descriptor → `three_ds_authentication.challenge` webhook
+→ the receiver and the OTP consumer → `POST /v1/three_ds_decisioning/challenge_response`,
+or `POST /v1/three_ds_decisioning/simulate/enter_otp` to play the cardholder's side.

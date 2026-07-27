@@ -631,7 +631,9 @@ Read-only and creates nothing — unlike a full walk, which creates cards and si
 transactions. The flag exists because re-recording the whole set to add one fixture moves
 every other one with it (ARCHITECTURE §10.7). What that one call establishes is in §11.7,
 along with what the sandbox *cannot* be made to produce: a real challenge needs the
-program configured for Out of Band challenges, which is a dashboard setting.
+program configured for Out of Band challenges, which Lithic has to enable for the program
+— it is not a dashboard toggle. ARCHITECTURE §11.9 records what probing the sandbox
+established, and what would close the gap.
 
 ---
 

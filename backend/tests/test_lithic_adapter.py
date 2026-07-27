@@ -649,7 +649,8 @@ async def test_a_challenge_the_acs_has_closed_is_already_answered(adapter: Lithi
     # This body is built from their `challenge-response-unprocessable` schema, which
     # requires a `message`, rather than recorded: a real 422 needs a real challenge,
     # and raising one needs the program configured for Out of Band challenges — a
-    # dashboard setting, not an API call. Said plainly because a documented shape is
+    # program-level configuration Lithic enables, not a setting we can add (§11.9).
+    # Said plainly because a documented shape is
     # weaker evidence than a recorded one (§11.7).
     respx.post(CHALLENGE_RESPONSE_PATH).mock(
         return_value=httpx.Response(422, json={"message": "challenge already completed"})
