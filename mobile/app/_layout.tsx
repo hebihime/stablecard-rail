@@ -11,6 +11,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import { ApiProvider } from '../src/api/ApiProvider';
+import { OtpHost } from '../src/otp/OtpHost';
 import { SessionProvider } from '../src/session';
 import { palette } from '../src/ui/theme';
 
@@ -28,7 +29,13 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="index" options={{ title: 'Card' }} />
+          <Stack.Screen name="reveal" options={{ title: 'Card details' }} />
+          <Stack.Screen name="fund" options={{ title: 'Add funds' }} />
         </Stack>
+        {/* Above the navigator, so a challenge appears over whichever screen is
+            in front. One arrives because a payment is being attempted, not
+            because of anything the person is doing in the app. */}
+        <OtpHost />
       </SessionProvider>
     </ApiProvider>
   );

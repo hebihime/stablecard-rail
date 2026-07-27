@@ -23,7 +23,6 @@ import './polyfills';
 import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
-  createAssociatedTokenAccountInstruction,
   createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
@@ -181,27 +180,6 @@ export async function sendUsdc(
   } catch (raised) {
     throw translateSendFailure(raised);
   }
-}
-
-/**
- * The instruction that would create a destination token account.
- *
- * Unused by the fund screen and exported because it is the one piece of the flow
- * that changes if the backend's deposit account is ever unfunded: the watched
- * address is an ATA the faucet created, and a transfer to an ATA that does not
- * exist fails rather than creating it.
- */
-export function createDestinationAccountInstruction(
-  payer: PublicKey,
-  owner: PublicKey,
-  mint: PublicKey,
-) {
-  return createAssociatedTokenAccountInstruction(
-    payer,
-    getAssociatedTokenAddressSync(mint, owner),
-    owner,
-    mint,
-  );
 }
 
 function encodeSecret(secret: Uint8Array): string {
