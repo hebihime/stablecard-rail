@@ -28,6 +28,15 @@ export interface Provider {
   funding_model: FundingModel;
 }
 
+export interface Cardholder {
+  provider_id: string;
+  cardholder_id: string;
+  email: string;
+  state: string;
+  created_at: string;
+  raw: Record<string, unknown>;
+}
+
 export interface Card {
   provider_id: string;
   card_id: string;

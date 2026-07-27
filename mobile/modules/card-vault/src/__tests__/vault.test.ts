@@ -47,11 +47,17 @@ describe('MemoryCardVault', () => {
 });
 
 describe('the keys this app stores on a device', () => {
-  it('are exactly two, and neither is a card number', () => {
+  it('are the three named here, and none of them is a card number', () => {
     // Named centrally so there is one place to see everything kept on a device.
-    // The absence of a PAN here is not an oversight: the backend has none to give
-    // (docs/ARCHITECTURE.md §12.2).
-    expect(Object.values(VAULT_KEYS)).toEqual(['wallet.secret-key', 'reveal.token']);
+    // The absence of a PAN is not an oversight: the backend has none to give
+    // (docs/ARCHITECTURE.md §12.2). Two are secrets; `selectedCard` is device
+    // state kept here rather than adding a second storage dependency for one
+    // string — see the comment on the constant.
+    expect(Object.values(VAULT_KEYS)).toEqual([
+      'wallet.secret-key',
+      'reveal.token',
+      'session.selected-card',
+    ]);
   });
 
   it('are namespaced, so two purposes cannot collide', () => {

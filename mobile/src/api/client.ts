@@ -24,6 +24,7 @@
 import type {
   Balance,
   Card,
+  Cardholder,
   ChallengeDecision,
   ChallengeResponse,
   FundingIntent,
@@ -94,6 +95,29 @@ export class StableCardClient {
 
   listProviders(): Promise<Provider[]> {
     return this.request<Provider[]>('GET', '/providers');
+  }
+
+  /**
+   * Create a cardholder. Demo-shaped details, and deliberately no form behind it:
+   * there is no KYC in this system, and collecting a legal name would imply one.
+   */
+  createCardholder(
+    providerId: string,
+    request: { email: string; first_name: string; last_name: string },
+  ): Promise<Cardholder> {
+    return this.request<Cardholder>('POST', `/providers/${enc(providerId)}/cardholders`, request);
+  }
+
+  createCard(
+    providerId: string,
+    cardholderId: string,
+    request: { currency: string; spend_limit_minor?: number },
+  ): Promise<Card> {
+    return this.request<Card>(
+      'POST',
+      `/providers/${enc(providerId)}/cardholders/${enc(cardholderId)}/cards`,
+      request,
+    );
   }
 
   getCard(providerId: string, cardId: string): Promise<Card> {

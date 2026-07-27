@@ -28,6 +28,16 @@ export const VAULT_KEYS = {
   walletSecret: 'wallet.secret-key',
   /** The most recent reveal token (SPEC.md §9.2). Worthless once spent. */
   revealToken: 'reveal.token',
+  /**
+   * The `(provider_id, card_id)` pair the app is looking at.
+   *
+   * Not a secret, and kept here anyway. This system has no authentication, so
+   * there is no session to derive a card from — the selection is device state, and
+   * the vault is the only key-value store this app has that works identically on
+   * all three platforms. The alternative is a second storage dependency for one
+   * string. See `src/session.tsx`.
+   */
+  selectedCard: 'session.selected-card',
 } as const;
 
 /**
