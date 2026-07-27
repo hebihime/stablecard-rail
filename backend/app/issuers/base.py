@@ -227,6 +227,38 @@ class ChallengeAlreadyAnsweredError(IssuerError):
         self.reason = reason
 
 
+class RevealUnsupported(IssuerError):
+    """This provider has no card-reveal path we are willing to use.
+
+    A capability gap, like `ChallengeResponseUnsupported`, but the gap is partly
+    ours by choice. Lithic and Stripe both *would* hand over a sandbox PAN — Lithic
+    on the card object, Stripe behind `expand[]=number,cvc` — and taking it would
+    route card-number material through a backend built so that none exists in it
+    (docs/ARCHITECTURE.md §12.2). Gnosis Pay's PSE is the model this repo follows,
+    and under PSE the partner backend never sees a number at all.
+
+    Never retryable: waiting does not give a provider a secure-rendering path, and
+    it does not change our mind about the two that have one.
+    """
+
+    def __init__(self, provider_id: str) -> None:
+        super().__init__(
+            f"{provider_id} has no card-reveal path; "
+            f"card details are not available through this adapter",
+            retryable=False,
+        )
+        self.provider_id = provider_id
+
+
+class RevealTokenError(IssuerError):
+    """A reveal could not be completed at the provider.
+
+    Distinct from our own token being unusable, which never reaches an adapter: this
+    is the provider refusing the exchange — an ephemeral token expired, replayed, or
+    minted against a card the program no longer owns.
+    """
+
+
 class WebhookParseError(IssuerError):
     """An authentic delivery whose body cannot be read.
 
@@ -300,6 +332,34 @@ class FundingResult(_Frozen):
     issuer_funding_ref: str | None = None
     status: FundingStatus
     amount: Money
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class RevealedCard(_Frozen):
+    """What a reveal hands back — deliberately not a card number.
+
+    SPEC.md §9.2 asks for "full PAN/CVV fetched via a short-lived, single-use reveal
+    token", structured "deliberately as the Gnosis Pay PSE pattern". Those two
+    requirements pull against each other, and PSE wins: under PSE the partner backend
+    calls for an ephemeral token, hands it to the client, and an SDK renders the card
+    inside an isolated component. The number never reaches the partner's servers,
+    which is the entire point of the design.
+
+    So this model has nowhere to put a PAN, and `tests/test_card_reveal.py` asserts
+    that rather than trusting it. `rendered_in` names where the number actually
+    appears, so a client can say so honestly instead of implying it has been withheld
+    by accident.
+    """
+
+    provider_id: str
+    card_id: str
+    #: Enough to confirm *which* card is being revealed, and no more.
+    last_four: str
+    exp_month: int
+    exp_year: int
+    #: The isolated surface the real number is rendered on, named by the provider.
+    #: `"pse-iframe"` for Gnosis Pay.
+    rendered_in: str
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -460,6 +520,27 @@ class CardIssuerAdapter(ABC):
             ChallengeAlreadyAnsweredError: it has already been decided or has timed out.
         """
         raise ChallengeResponseUnsupported(self.provider_id)
+
+    async def reveal(self, card_id: str) -> RevealedCard:
+        """Exchange for the card's own details, on the provider's secure path.
+
+        **Not abstract, and the default raises** — the third method to take this
+        shape, after `webhook_event_id` and `respond_to_challenge`, and by now the
+        pattern is the interface's answer to capability gaps rather than an
+        exception to it.
+
+        What an adapter does inside here is a whole provider protocol: for Gnosis Pay
+        it is minting a 60-second PSE ephemeral token and redeeming it, both within
+        this call, so the provider credential never crosses our API boundary. Our own
+        short-lived single-use token is a separate layer that lives in `app/reveal/`
+        and knows nothing about any of this.
+
+        Raises:
+            RevealUnsupported: this provider has no reveal path we use.
+            CardNotFoundError: no such card at the provider.
+            RevealTokenError: the provider refused the exchange.
+        """
+        raise RevealUnsupported(self.provider_id)
 
     def webhook_event_id(self, headers: Mapping[str, str], body: bytes) -> str | None:
         """Dedup id read from the envelope, before parsing (SPEC.md §4).

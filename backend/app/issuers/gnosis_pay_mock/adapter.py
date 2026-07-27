@@ -41,6 +41,7 @@ from app.issuers.base import (
     FundingModel,
     FundingResult,
     IssuerError,
+    RevealedCard,
     WebhookParseError,
 )
 from app.issuers.gnosis_pay_mock.config import get_gnosis_pay_mock_settings
@@ -52,6 +53,7 @@ from app.issuers.gnosis_pay_mock.signing import (
 )
 from app.issuers.gnosis_pay_mock.simulator import (
     CHAIN_NAME,
+    EPHEMERAL_TOKEN_TTL_SECONDS,
     EXTENSION_EVENT_TYPES,
     PROVIDER_EVENT_TYPES,
     PROVIDER_ID,
@@ -290,6 +292,38 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
                 "response": challenge.answer,
                 "answeredAt": challenge.answered_at.isoformat() if challenge.answered_at else None,
             },
+        )
+
+    # -------------------------------------------------------------- reveal ----
+
+    async def reveal(self, card_id: str) -> RevealedCard:
+        """`POST /api/v1/ephemeral-token`, then the PSE exchange (SPEC.md §9.2).
+
+        Both halves happen here, in one call, and that is the design rather than a
+        shortcut. Upstream the mint is authenticated by **mTLS with the partner's app
+        id in the certificate CN** — a mobile client cannot make it, has no
+        certificate, and should never be handed a credential minted with ours. So the
+        ephemeral token is born and dies inside this method, and what leaves is a
+        `RevealedCard` carrying no token and no number.
+
+        The single-use property therefore protects the provider call, not the
+        cardholder-facing screen: our own token in `app/reveal/` is what makes the
+        *screen* single-use. Two layers, two different things being protected, and
+        conflating them would mean either replayable provider credentials or a
+        cardholder who cannot reopen a screen they just closed.
+        """
+        minted = self._simulator.mint_ephemeral_token(card_id)
+        rendered = self._simulator.redeem_ephemeral_token(minted["data"]["token"])
+        return RevealedCard(
+            provider_id=self.provider_id,
+            card_id=rendered["cardId"],
+            last_four=rendered["lastFourDigits"],
+            exp_month=rendered["expMonth"],
+            exp_year=rendered["expYear"],
+            rendered_in=rendered["renderedIn"],
+            # The token is deliberately absent from `raw` as well: `raw` reaches the
+            # ledger, and a ledger row is the last place a credential belongs.
+            raw={"expiresIn": EPHEMERAL_TOKEN_TTL_SECONDS},
         )
 
     # ------------------------------------------------------------ webhooks ----

@@ -858,6 +858,15 @@ class GnosisPaySimulator:
         self._ephemeral[token] = (card.card_id, expires_at)
         return {"data": {"token": token, "expiresAt": expires_at.isoformat()}}
 
+    @property
+    def spent_ephemeral_tokens(self) -> frozenset[str]:
+        """Tokens already redeemed. For tests and demos, never for the pipeline.
+
+        A copy rather than the set itself: this is the provider's memory of what has
+        been spent, and a caller able to `discard()` from it could replay a reveal.
+        """
+        return frozenset(self._spent_ephemeral)
+
     def redeem_ephemeral_token(self, token: str) -> dict[str, Any]:
         """What the PSE SDK gets back — minus the part it is designed to protect.
 

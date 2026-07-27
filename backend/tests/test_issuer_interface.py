@@ -54,7 +54,7 @@ SPEC_METHODS = (
     "verify_webhook",
     "parse_webhook",
 )
-ADDED_METHODS = ("get_card", "webhook_event_id", "respond_to_challenge")
+ADDED_METHODS = ("get_card", "webhook_event_id", "respond_to_challenge", "reveal")
 
 
 @pytest.mark.parametrize("name", SPEC_METHODS)
