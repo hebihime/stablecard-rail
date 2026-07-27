@@ -55,6 +55,31 @@ export function formatMinor(amountMinor: number, currency: string): string {
 }
 
 /**
+ * A token amount, rendered as the currency it funds.
+ *
+ * **USDC has six decimals and a USD card has two**, and the gap between them is the
+ * trap. The backend states the rule (docs/ARCHITECTURE.md §9, "integer division by
+ * 10^4, truncating, remainder kept as dust") and phase 8 walked into it anyway: the
+ * fund screen divided a six-decimal amount by 100 and offered to send "$100.00" for
+ * a transfer of one dollar. jp caught it on screen.
+ *
+ * So the conversion is a function, it takes the token's decimals rather than
+ * assuming them, and the caller passes the same number it gives the token program.
+ * A label and an instruction that read from one value cannot disagree.
+ *
+ * Truncating, like the backend: anything finer than a minor unit of the currency is
+ * dust, and is not rounded up into money that was never sent.
+ */
+export function formatTokenMinor(
+  amountMinor: number,
+  tokenDecimals: number,
+  currency: string,
+): string {
+  const scale = 10 ** Math.max(0, tokenDecimals - minorUnitExponent(currency));
+  return formatMinor(Math.trunc(amountMinor / scale), currency);
+}
+
+/**
  * A masked card number, from the only digits this system holds.
  *
  * Four groups, so it reads as a card rather than as a string that happens to end in

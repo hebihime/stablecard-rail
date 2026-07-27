@@ -35,6 +35,21 @@ export { FEE_LAMPORTS, WalletError } from './errors';
 /** Devnet. Named here rather than configured: this app signs nothing else. */
 export const DEVNET_RPC_URL = 'https://api.devnet.solana.com';
 
+/**
+ * How long a devnet call is given before it is abandoned.
+ *
+ * `@solana/web3.js` applies no timeout of its own, so a node that accepts a
+ * connection and never answers leaves the caller waiting forever — and on the fund
+ * screen that is a button spinning with no way to stop it. jp saw the spinner and
+ * asked whether the transfer was real, which is the question a hung request
+ * inevitably produces.
+ *
+ * Fifteen seconds rather than the API client's ten: this is a public node that
+ * rate-limits readily (the backend has a recorded 429 for it), and being slow is
+ * one of the ways it says so.
+ */
+export const RPC_TIMEOUT_MS = 15_000;
+
 export interface WalletSnapshot {
   address: string;
   /** Lamports. Pays fees only; a transfer needs a few thousand of them. */
@@ -91,8 +106,28 @@ export function connection(rpcUrl: string = DEVNET_RPC_URL): Connection {
   // `confirmed` rather than `finalized`: the deposit watcher on the backend waits
   // for finality itself, and making the app wait for it too would put thirty
   // seconds of nothing between the button and the first state change on screen.
-  return new Connection(rpcUrl, 'confirmed');
+  return new Connection(rpcUrl, { commitment: 'confirmed', fetch: timeoutFetch });
 }
+
+/**
+ * `fetch` with a deadline, handed to `Connection`.
+ *
+ * The library takes a `fetch` in its config, which is the only seam it offers for
+ * this — there is no timeout option. An abort surfaces as a rejection from whichever
+ * RPC method was in flight, and `translateSendFailure` and `describeRpcFailure` turn
+ * it into something a person can act on rather than a spinner.
+ */
+const timeoutFetch: typeof fetch = async (input, init) => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, RPC_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 export async function readWallet(
   keypair: Keypair,
@@ -197,6 +232,9 @@ function decodeSecret(stored: string): Uint8Array {
 }
 
 function describeRpcFailure(raised: unknown): string {
+  if (raised instanceof Error && raised.name === 'AbortError') {
+    return `the devnet node did not answer within ${RPC_TIMEOUT_MS / 1000}s`;
+  }
   const because = raised instanceof Error ? raised.message : String(raised);
   // The public devnet endpoint rate-limits readily — a recorded fact on the backend
   // side too (`tests/fixtures/solana/error_rate_limited.json`).
@@ -206,6 +244,14 @@ function describeRpcFailure(raised: unknown): string {
 }
 
 function translateSendFailure(raised: unknown): WalletError {
+  if (raised instanceof Error && raised.name === 'AbortError') {
+    // Genuinely ambiguous, and saying so is the honest answer: an aborted send may
+    // still have reached the node. Claiming it failed could invite a second one.
+    return new WalletError(
+      'rpc',
+      `the devnet node did not answer within ${RPC_TIMEOUT_MS / 1000}s — the transfer may or may not have been submitted`,
+    );
+  }
   const because = raised instanceof Error ? raised.message : String(raised);
   if (/insufficient lamports|attempt to debit an account but found no record/i.test(because)) {
     return new WalletError(

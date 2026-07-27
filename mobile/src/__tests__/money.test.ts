@@ -11,6 +11,7 @@ import {
   formatCountdown,
   formatExpiry,
   formatMinor,
+  formatTokenMinor,
   maskedPan,
   minorUnitExponent,
 } from '../money';
@@ -91,5 +92,54 @@ describe('formatCountdown', () => {
 
   it('floors a fractional second rather than rounding up past the deadline', () => {
     expect(formatCountdown(9.9)).toBe('0:09');
+  });
+});
+
+
+describe('formatTokenMinor', () => {
+  /**
+   * The regression this section exists for.
+   *
+   * The fund screen rendered a six-decimal USDC amount with a hardcoded `/ 100` and
+   * offered to send **$100.00** for a transfer of one dollar — a hundredfold
+   * overstatement on the one button in the app that moves money. jp read the button
+   * and asked whether it was real.
+   *
+   * The rule was already written down: docs/ARCHITECTURE.md §9, "USDC has six
+   * decimals, a USD card has two … integer division by 10^4". Knowing it was not
+   * enough; the conversion had to stop being arithmetic at the call site.
+   */
+  it('renders one USDC as one dollar', () => {
+    expect(formatTokenMinor(1_000_000, 6, 'USD')).toMatch(/^\$?1\.00$/);
+  });
+
+  it('does not render one USDC as a hundred dollars', () => {
+    // Stated as its own assertion because this is the bug, not a variation of it.
+    expect(formatTokenMinor(1_000_000, 6, 'USD')).not.toMatch(/100/);
+  });
+
+  it('scales by the difference in decimals, not by a constant', () => {
+    expect(formatTokenMinor(2_500_000, 6, 'USD')).toMatch(/2\.50/);
+    // An 18-decimal token — what a Gnosis Safe holds — through the same function.
+    expect(formatTokenMinor(2_500_000_000_000_000_000, 18, 'USD')).toMatch(/2\.50/);
+  });
+
+  it('needs no scaling when the token and the currency agree', () => {
+    expect(formatTokenMinor(250, 2, 'USD')).toMatch(/2\.50/);
+  });
+
+  it('truncates rather than rounding up into money nobody sent', () => {
+    // 1.999999 USDC is one dollar and ninety-nine cents plus dust. Rounding it to
+    // $2.00 would show a figure larger than the transfer.
+    expect(formatTokenMinor(1_999_999, 6, 'USD')).toMatch(/1\.99/);
+  });
+
+  it('shows sub-cent dust as zero rather than as something', () => {
+    expect(formatTokenMinor(999, 6, 'USD')).toMatch(/0\.00/);
+  });
+
+  it('handles a token with fewer decimals than the currency', () => {
+    // Not a real pairing here, and the arithmetic must not invert and multiply.
+    expect(formatTokenMinor(250, 0, 'USD')).toMatch(/2\.50/);
   });
 });

@@ -22,7 +22,7 @@ import QRCode from 'react-native-qrcode-svg';
 
 import { useClient, useQuery } from '../api/ApiProvider';
 import type { DepositRoute, FundingIntent, FundingIntentPage } from '../api/types';
-import { formatMinor } from '../money';
+import { formatMinor, formatTokenMinor } from '../money';
 import type { CardSelection } from '../session';
 import { Button, ErrorNotice, Field, Loading, Screen, Section } from '../ui/components';
 import { palette, radius, spacing, text } from '../ui/theme';
@@ -32,8 +32,16 @@ import type { WalletSnapshot } from '../wallet/wallet';
 
 /** Fast, because this is the screen someone watches while a state machine runs. */
 const INTENT_POLL_MS = 2_000;
-/** One dollar. Small enough to repeat, large enough to survive the dust floor. */
-const SEND_AMOUNT_MINOR = 1_000_000;
+/**
+ * One dollar, in USDC's own minor units — six decimals, so 1_000_000 is 1.00 USDC.
+ *
+ * Named for the token rather than the card on purpose. This number is handed to
+ * `transferChecked`, which verifies it against the mint's decimals; rendering it as
+ * a card amount needs `formatTokenMinor` and the same decimal count, never a
+ * hardcoded divisor. Getting that wrong offered to send "$100.00" for one dollar
+ * until jp read the button.
+ */
+const SEND_AMOUNT_USDC_MINOR = 1_000_000;
 
 export function FundScreen({ selection }: { selection: CardSelection }) {
   const client = useClient();
@@ -106,7 +114,7 @@ export function FundScreen({ selection }: { selection: CardSelection }) {
         to: route.data.deposit_address,
         mint: route.data.mint,
         decimals: route.data.decimals,
-        amountMinor: SEND_AMOUNT_MINOR,
+        amountMinor: SEND_AMOUNT_USDC_MINOR,
       });
       setSent(signature);
       // The watcher polls on its own schedule; asking now shortens the wait for the
@@ -192,7 +200,13 @@ export function FundScreen({ selection }: { selection: CardSelection }) {
               </Text>
             )}
             <Button
-              label={`Send ${formatMinor(SEND_AMOUNT_MINOR / 100, 'USD')}`}
+              // The route's `decimals` — the same value handed to `transferChecked`
+              // — so the label and the instruction cannot disagree.
+              label={`Send ${formatTokenMinor(
+                SEND_AMOUNT_USDC_MINOR,
+                route.data.decimals,
+                'USD',
+              )}`}
               onPress={() => void send()}
               busy={sending}
               testID="send-usdc"

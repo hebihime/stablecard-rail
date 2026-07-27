@@ -106,6 +106,32 @@ describe('the address', () => {
   });
 });
 
+describe('the amount on the button', () => {
+  it('says one dollar, because one dollar is what it sends', async () => {
+    // The regression jp found: a six-decimal USDC amount rendered with a hardcoded
+    // `/ 100` said "$100.00" for a transfer of 1.00 USDC.
+    await show();
+
+    const button = await screen.findByTestId('send-usdc');
+    expect(button).toHaveTextContent(/\$1\.00/);
+    expect(button).not.toHaveTextContent(/100\.00/);
+  });
+
+  it('reads the decimals from the same place the instruction does', async () => {
+    // The label and `transferChecked` take one value, so they cannot disagree.
+    await show();
+
+    fireEvent.press(await screen.findByTestId('send-usdc'));
+
+    await waitFor(() => {
+      expect(walletModule.sendUsdc).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ amountMinor: 1_000_000, decimals: 6 }),
+      );
+    });
+  });
+});
+
 describe('the wallet', () => {
   it('sends to the watched address, with the mint and decimals the backend gave', async () => {
     // `transferChecked` verifies both at the token program. Getting the decimals

@@ -167,6 +167,23 @@ describe('reading a balance', () => {
     expect((await readWallet(keypair, DEVNET_USDC, { rpc })).usdcMinor).toBeNull();
   });
 
+  it('gives up on a node that never answers, rather than waiting forever', async () => {
+    // `@solana/web3.js` applies no timeout of its own, so a node that accepts the
+    // connection and goes quiet leaves the caller hanging — on the fund screen that
+    // is a button spinning with nothing to stop it, which is what made jp ask
+    // whether the transfer was real at all.
+    const rpc = fakeRpc({});
+    rpc.getBalance.mockRejectedValueOnce(
+      Object.assign(new Error('Aborted'), { name: 'AbortError' }),
+    );
+    const { keypair } = await loadWallet();
+
+    await expect(readWallet(keypair, DEVNET_USDC, { rpc })).rejects.toMatchObject({
+      kind: 'rpc',
+      message: expect.stringContaining('did not answer'),
+    });
+  });
+
   it('recognises the devnet node rate-limiting, which it does readily', async () => {
     const rpc = fakeRpc({});
     rpc.getBalance.mockRejectedValueOnce(new Error('429 Too Many Requests'));
@@ -211,6 +228,26 @@ describe('sending', () => {
         rpc,
       }),
     ).rejects.toMatchObject({ kind: 'no-usdc' });
+  });
+
+  it('refuses to claim an aborted send failed, because it may not have', async () => {
+    // A send that timed out may still have reached the node. Reporting it as a
+    // failure invites a second transfer of the same money.
+    const rpc = fakeRpc({ send: Object.assign(new Error('Aborted'), { name: 'AbortError' }) });
+    const { keypair } = await loadWallet();
+
+    const failure = await sendUsdc(keypair, {
+      to: Keypair.generate().publicKey.toBase58(),
+      mint: DEVNET_USDC,
+      decimals: 6,
+      amountMinor: 1_000_000,
+      rpc,
+    })
+      .then(() => null)
+      .catch((raised: unknown) => raised as WalletError);
+
+    expect(failure?.kind).toBe('rpc');
+    expect(failure?.message).toMatch(/may or may not have been submitted/);
   });
 
   it.each([
