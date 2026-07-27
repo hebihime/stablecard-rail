@@ -31,7 +31,7 @@ pass, lint and types are clean, and the phase is demo-able.
 | 5 | Solana watcher + simulated bridge + auto top-up | **done** |
 | 6 | Real bridge adapter | **done** |
 | 7 | 3DS / OTP service | **done** |
-| 8 | Mobile app | — |
+| 8 | Mobile app | **done** |
 | 9 | Fireblocks signer (stretch) | — |
 | 10 | Docs + polish | — |
 
@@ -51,6 +51,11 @@ cd backend && python scripts/demo_phase3.py                  # a real fiat-rail 
 cd backend && python scripts/demo_phase5.py                  # the funding pipeline, no network
 cd backend && python scripts/demo_phase6.py                  # the real bridge, verified live
 cd backend && python scripts/demo_phase7.py                  # the 3DS/OTP flow, no network
+
+# The client. `npx expo start --web` needs the backend above; nothing else does.
+cd mobile && npm ci && npx expo start --web                  # four surfaces, in a browser
+cd mobile && EXPO_PUBLIC_DEMO=1 npx expo start --web         # ...on recorded fixtures, no backend
+cd mobile && npx expo run:ios                                # a dev build, for the native module
 ```
 
 Full walk-through — card lifecycle over HTTP, signed webhook deliveries, duplicate
@@ -135,7 +140,25 @@ backend/app/
   its details came off their embedded OpenAPI rather than the prose on the same page:
   the decline value is `DECLINE_BY_CUSTOMER`, and success is 200 with no body. Their
   404 has no body either, which is in neither — it was recorded.
-- **`gnosis_pay_mock`** models the Gnosis Pay partner pattern, shaped on their public
+- **The client is one codebase for iOS, Android and web.** Expo plus React Native
+  Web, with `expo-router` making the screens real URLs in the browser build. The
+  static export deploys anywhere; `EXPO_PUBLIC_DEMO=1` runs it on recorded fixtures
+  with no backend at all, and demo mode is a build decision that is never inferred
+  from a failed request.
+- **The reveal screen has no card number, and that is the Gnosis Pay PSE pattern
+  rather than a shortfall.** Under PSE the number is rendered by the provider inside
+  a component the partner's backend never sees, so `RevealedCard` has nowhere to put
+  one — asserted, not merely unpopulated. Lithic and Stripe would both hand over a
+  sandbox PAN if asked; neither is asked.
+- **Secure storage is a native module of ours**, not a package: Swift against the iOS
+  Keychain, Kotlin against the Android Keystore, and a non-extractable WebCrypto key
+  in IndexedDB. It reports which protection a given platform actually gives —
+  `device-keystore`, `origin-scoped` or `none` — because those are not the same
+  thing, and the screens say which one they got.
+- **The fund screen renders the state machine the backend serves**, rather than a
+  copy of it in TypeScript. That machine has changed twice since it was written, and
+  neither change would have reached a hand-maintained copy.
+- - **`gnosis_pay_mock`** models the Gnosis Pay partner pattern, shaped on their public
   docs: a Safe smart account per user on Gnosis Chain, and funding that is a confirmed
   stablecoin transfer into it rather than an API call — so `fund_card` verifies and
   attributes a deposit it did not cause, and cannot move money. That is what proves

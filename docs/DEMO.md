@@ -672,6 +672,102 @@ its own `stablecard_test` database, uses Redis database 15 (which it flushes), a
 never contacts an external service. To point either elsewhere, set
 `TEST_DATABASE_URL` / `TEST_REDIS_URL`.
 
+---
+
+## Phase 8 — the mobile app (SPEC.md §9)
+
+Four surfaces: card, reveal, fund, and the 3DS modal. One codebase for iOS, Android
+and the browser.
+
+### The fastest look: no backend at all
+
+```bash
+cd mobile
+npm ci
+EXPO_PUBLIC_DEMO=1 npx expo start --web
+```
+
+Recorded fixtures, no server, no credentials. Create a card, open **Add funds**, and
+watch the funding intent walk `PENDING → … → SETTLED` on a timer; a 3DS challenge
+appears on its own about twenty seconds in. Nothing here touches a chain, and the
+fund screen says so.
+
+This is also what a deployed build serves — `npx expo export --platform web` produces
+a static site, and `mobile/vercel.json` is the whole deploy configuration.
+
+### Against the running backend
+
+```bash
+docker compose up -d postgres redis
+cd backend && source .venv/bin/activate && uvicorn app.main:app --port 8000
+
+cd mobile && npx expo start --web        # a second terminal
+```
+
+`http://localhost:8081` is already allowed by `CORS_ALLOWED_ORIGINS`, so nothing else
+is needed. The app lists the providers from the registry, creates a cardholder and a
+card at whichever you pick, and everything from there is real: provider state, the
+ledger, the reveal exchange, the deposit route.
+
+**Use `127.0.0.1`, not `localhost`, if anything looks wrong.** They are different
+origins to a browser, and on this machine `localhost` has resolved to a stale
+container before now (see the WORKLOG trap).
+
+To watch the funding pipeline move against the real state machine, drive a deposit
+from the backend side while the fund screen is open:
+
+```bash
+cd backend && python scripts/demo_phase5.py      # creates and advances an intent
+```
+
+To raise a 3DS challenge while the app is running:
+
+```bash
+cd backend && python scripts/demo_phase7.py --leave-open
+```
+
+The modal appears over whichever screen is in front. The badge in its corner reads
+**live** when the WebSocket is connected and **polling** when it is not — and the
+modal works either way, which is SPEC.md §6.3's ordering and is worth checking by
+stopping the socket.
+
+### The native build, and the native module
+
+```bash
+cd mobile && npx expo run:ios
+```
+
+A development build, not Expo Go: a custom native module cannot load in Expo Go, and
+the reveal screen reports `memory (none)` under **Secure storage** when it has not.
+In a dev build the same line reads `keychain (device-keystore)`, which is our Swift
+talking to `SecItemAdd`/`SecItemCopyMatching`.
+
+The first build takes a few minutes. Android has an equivalent (`npx expo run:android`)
+that has never been run here — there is no Android SDK on this machine, and the Kotlin
+is reviewed rather than executed.
+
+### The wallet is empty, and says so
+
+The fund screen generates a Solana keypair, seals it in the vault, and builds a real
+`transferChecked` against devnet. It has no SOL and no USDC, so **Send $1.00** fails
+with the chain's own refusal — "no devnet SOL to pay the fee", pointing at
+faucet.solana.com, or "no devnet USDC", pointing at faucet.circle.com. Fund the
+address the screen shows and the same button starts working with no code change.
+
+The secret is stored in `solana-keygen`'s JSON format precisely so it can be pasted
+into the CLI to fund it.
+
+### Checks
+
+```bash
+cd mobile
+npm run typecheck     # tsc --noEmit, strict
+npm test              # 334 tests, run once per platform
+npm run build:web     # the static export CI also builds
+```
+
+---
+
 ## Reset
 
 ```bash

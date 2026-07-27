@@ -2603,3 +2603,223 @@ the sandbox program. Once they have, the whole path is already built and needs n
 simulate with `CHALLENGE` in the descriptor → `three_ds_authentication.challenge` webhook
 → the receiver and the OTP consumer → `POST /v1/three_ds_decisioning/challenge_response`,
 or `POST /v1/three_ds_decisioning/simulate/enter_otp` to play the cardholder's side.
+
+---
+
+## 12. Decisions recorded in phase 8
+
+Phase 8 is SPEC.md §12.8: "Mobile app — four surfaces in §9 against the running
+backend." All four are built. What follows is what building them decided, and what
+they forced the backend to grow.
+
+### 12.1 One codebase, two targets — and why that is not a compromise
+
+jp's question at the phase boundary was whether the client had to be native at all,
+or could be something clickable on Vercel. It is not a choice: Expo builds React
+Native and React Native Web from the same TypeScript. `npx expo run:ios` produces
+the native app, `npx expo export --platform web` produces a static site, and
+`expo-router` makes the screens real URLs in the second (`/`, `/fund`, `/reveal`)
+rather than one opaque page.
+
+What that does force is a decision about the native module, and about what a
+deployed page talks to. Both are below.
+
+### 12.2 No PAN, and SPEC.md §9.2 asks for one
+
+§9.2 asks for "full PAN/CVV fetched via a short-lived, single-use reveal token" and,
+in the same paragraph, for the flow to be "architecturally identical" to Gnosis Pay's
+PSE pattern. Those pull against each other, because under PSE the card number is
+rendered by the provider's SDK inside a component neither the client nor the partner
+backend can read — the partner's servers never see it. Being architecturally
+identical means having no PAN to send.
+
+PSE wins, and jp confirmed it. The consequences, in order of how load-bearing they are:
+
+- `RevealedCard` has no field a PAN could go in, and a test asserts that rather than
+  trusting it. The invariant is structural, like phase 7's `Field(exclude=True)`.
+- Lithic and Stripe **would** supply a sandbox PAN — Lithic on the card object,
+  Stripe behind `expand[]=number,cvc`. Neither is asked. A test asserts neither
+  adapter overrides `reveal`, so neither can start returning one quietly.
+- The screen names the surface where the number would appear (`pse-iframe`) and says
+  in as many words that there is none in this system. Sixteen plausible digits would
+  demo better and would be the only dishonest thing in the repo.
+
+The cost is that the reveal screen is less impressive in a recording. The gain is
+that the architecture on show is the real one.
+
+### 12.3 Two tokens, and keeping them apart
+
+The reveal is two exchanges, not one:
+
+| | minted by | lives | who may spend it |
+| --- | --- | --- | --- |
+| PSE ephemeral token | the provider, under mTLS | 60s, single use | the adapter, inside one call |
+| our reveal token | this backend | 60s, single use | the client, once |
+
+The provider's token never leaves `GnosisPayMockAdapter.reveal()`. Upstream that mint
+is authenticated by mTLS with the partner's app id in the certificate CN — a mobile
+client cannot make the call, has no certificate, and should never hold a credential
+minted with ours.
+
+Ours is stored as a **hash of itself**, redeemed with `GETDEL`, and remembered as
+spent for fifteen minutes afterwards. Each of those is against a specific mistake:
+storing the token means anyone reading Redis holds working credentials; read-then-
+delete lets two simultaneous requests both win, which is the one race a single-use
+token exists to lose; and without the spent marker a replay is indistinguishable
+from a guess.
+
+**The replay/unknown split is for us, not for the caller.** Both answer 404 with
+identical prose. Telling an attacker which of their guesses was once real turns
+guessing into a search with feedback. The distinction is real and worth recording,
+so it is recorded in the ledger, where only we can read it — a replay names the card
+its token was minted for, and an unrecognised token names nothing, because nothing
+is what is honestly known about it.
+
+### 12.4 The state machine is served, not copied
+
+SPEC.md §9.3 has the fund screen render `PENDING → … → FUNDED`. The obvious
+implementation is a constant in TypeScript. That constant is a second copy of the
+state machine, in another language, updated by hand — and this machine has already
+changed twice since it was written (phase 5 added two self-transitions, phase 6
+changed what `BRIDGED` means). Neither change would have reached such a copy, and
+neither would have failed anything.
+
+So `GET /funding/intents/{id}` returns `progress.sequence` alongside the state, and
+`HAPPY_PATH` is **derived from the transition table** by walking it rather than
+written out. `tests/test_transition_table.py` already held a hand-transcribed copy
+for a different assertion; it is now the golden copy the derived one is checked
+against, in the same spirit as `EXPECTED`. A new test asserts each state has at most
+one non-failure successor, which is what makes the derivation well-defined — a future
+branch in the machine fails there rather than being resolved by sort order.
+
+**A failure state has `position: null`.** Giving `FAILED_BRIDGE` an index would let a
+client draw "step 3 of 7, four still to come" for an intent that is going nowhere. A
+failure is not a later stage of the same journey, and the API makes that ungraphable
+rather than merely discouraged.
+
+### 12.5 The address the fund screen must not show
+
+§9.8 recorded that there are two deposit addresses and that §3.4 named the wrong one.
+Phase 8 met the same distinction from the other side: the fund screen shows the
+**source** — the SPL token account this service watches — and the card's Safe is the
+**destination**. Showing the Safe would collect real money at an address the watcher
+never polls.
+
+`POST /funding/deposit-routes` claims that address for a card. Two things about it:
+
+- **The address is not a parameter.** It is derived from this service's own deposit
+  keypair. A caller who could name one could point the watcher at somebody else's
+  token account and be credited for their deposits. There is a test for exactly that.
+- **It is idempotent, and was written that way in phase 5.** `funding/routes.py`'s
+  docstring already said re-registering is a no-op "because the fund screen (SPEC.md
+  §9.3) will do it every time it is opened". Three phases later, it does.
+
+The address derived is the associated token account, not the wallet: the wallet holds
+SOL and the ATA holds the token, and a fund screen showing the wallet is §9.8's trap
+in its other direction.
+
+### 12.6 One interface, three protections — and saying which one you got
+
+SPEC.md §9 asks for "at least one small native-module touchpoint … so 'native module
+experience' is honestly demonstrable", and jp asked for it by name. `expo-secure-store`
+would satisfy the letter and demonstrate calling somebody else's native module, which
+is the thing §9 asks us not to do. So `modules/card-vault` is ours: Swift against the
+iOS Keychain, Kotlin against the Android Keystore, and a non-extractable WebCrypto key
+in IndexedDB for the browser.
+
+The part that makes it honest rather than merely impressive is `describe()`. The three
+backends do not offer the same protection and the type says so:
+
+| platform | backend | protection | what it means |
+| --- | --- | --- | --- |
+| iOS | Keychain | `device-keystore` | held by the OS, released to this app alone |
+| Android | Keystore + GCM | `device-keystore` | key never leaves the Keystore; ciphertext in prefs |
+| web | WebCrypto + IndexedDB | `origin-scoped` | key cannot be exported; any script on the origin can still use it |
+| Expo Go | memory | `none` | nothing is stored |
+
+`origin-scoped` is deliberately not `device-keystore`. A non-extractable `CryptoKey`
+genuinely cannot be exfiltrated — a real property, and it defends against a stolen
+profile directory — but XSS beats it, because the attacker does not need the key when
+they can ask it to decrypt. Calling both "secure storage" would paper over the
+difference, so the reveal screen reports which one this device gave, and the fund
+screen refuses to persist a signing key at all under `none`.
+
+Three implementation notes, each silent when wrong:
+
+- **iOS updates before it adds.** `SecItemAdd` answers `errSecDuplicateItem` rather
+  than overwriting, so an add-only implementation keeps the first value a key is ever
+  given and discards every later one — for a rotating reveal token, serving a stale
+  credential forever. Accessibility is `AfterFirstUnlockThisDeviceOnly`:
+  `WhenUnlocked` fails a background read at the moment it is needed, and
+  `ThisDeviceOnly` is the half that keeps the item out of iCloud Keychain and backups.
+- **Android talks to the Keystore directly**, not through
+  `androidx.security:security-crypto`, which is fewer lines and unmaintained since
+  1.1.0-alpha06 — and the point of this module is native work that is demonstrably
+  ours. The IV is read back off the cipher rather than supplied, because
+  `setRandomizedEncryptionRequired` forbids supplying one and an IV reused under one
+  key breaks GCM completely.
+- **The web backend memoizes the key promise, not the key.** Two cold reads racing
+  would otherwise each generate one, and the loser's writes are orphaned — a bug that
+  appears only under load and looks like data loss.
+
+### 12.7 What has no auth, and what that costs each screen
+
+Phase 7 recorded that this API has no authentication (§11.6). Phase 8 is where that
+stops being abstract, because the client is the thing that would have a session:
+
+- **The card is a selection, not an identity.** `src/session.tsx` holds a
+  `(provider_id, card_id)` pair the user chose. In a real deployment it would come
+  from a signed-in identity and every route would check it.
+- **CORS is load-bearing here in a way it usually is not.** With no auth, the only
+  thing between a page in another tab and a backend on `localhost:8000` is whether
+  the browser hands over the response. So `*` is refused and the service will not
+  start with it — an allowed origin is an origin in full control. A test also records
+  that a foreign origin still gets a 200: the server answers and the *browser*
+  withholds it, which is not authorization and is no substitute for it.
+- **CORS does not gate WebSockets at all.** `/ws/otp` accepts a connection from any
+  origin whatever the setting says, because the same-origin policy has never applied
+  to them. Left that way deliberately: an `Origin` check in the handshake would look
+  like a control and stop nothing, since anything that is not a browser sends whatever
+  origin it likes. The honest fix is the auth this demo does not have, and a test
+  fails the day someone assumes otherwise.
+
+### 12.8 Polling is the contract, in the client too
+
+SPEC.md §6.3 orders the two delivery routes — "polling is the reliable fallback; push
+is the demo-quality path" — and phase 7 built the backend that way. The client honours
+the same ordering: `useChallenges` opens the socket and depends on none of it. Three
+tests remove the socket, one of them deleting `WebSocket` from the runtime entirely,
+and assert the modal still works. A hook that quietly depended on push would pass
+every happy-path test and strand a cardholder on hotel wifi.
+
+Because both routes carry the identical payload, deduplication is
+`(provider_id, challenge_id)` and nothing else — which is why the backend returns
+both fields in every payload.
+
+Building the modal found one real bug worth recording: dismissing inside `answer`
+closed it the instant the request returned, **including** when it returned
+`delivered: false`. That is §6.5's fallback and not a failure — the provider has no
+endpoint, the decision is ledgered — and it is the one case with something left to
+say. `dismiss` is a separate operation for exactly that reason.
+
+### 12.9 What phase 8 could not verify
+
+Stated plainly, because the alternative is letting it be assumed.
+
+- **The Swift and the Kotlin are reviewed, not run.** Jest cannot execute them and
+  this repo has no XCTest or JUnit harness. The TypeScript facade, the web backend and
+  the Expo Go fallback are covered by 334 tests across three platforms; the two native
+  files are not covered by any of them.
+- **Android has not been built at all.** There is no Android SDK on this machine. The
+  Kotlin compiles in review only.
+- **iOS needs a development build.** A custom native module cannot load in Expo Go,
+  which is what `protection: 'none'` reports when it happens. `npx expo run:ios` is
+  the command; jp has Xcode and simulators.
+- **The wallet has never sent anything.** It builds and signs a real
+  `transferChecked` against a real devnet node, and has no SOL and no USDC to send —
+  jp's faucet attempts were rate-limited (§10.6, and the WORKLOG). The failure paths
+  are tested against the chain's own error strings; the success path is not. Nothing
+  in the code changes when a faucet lands.
+- **No end-to-end run against a live backend from a device.** The screens are tested
+  against a `StableCardClient` whose `fetch` is stubbed by route, and the backend's
+  1666 tests cover the other side. What is untested is the join.
