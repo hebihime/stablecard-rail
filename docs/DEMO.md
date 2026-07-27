@@ -709,6 +709,12 @@ is needed. The app lists the providers from the registry, creates a cardholder a
 card at whichever you pick, and everything from there is real: provider state, the
 ledger, the reveal exchange, the deposit route.
 
+**Restarting the backend loses every `gnosis_pay_mock` card.** Its simulator runs
+inside the backend process (SPEC.md §3.2), so the cards go with it — while the card
+id stays in this device's storage. The app notices and offers "Choose a provider and
+start over"; take it. This is expected for the mock and would not happen at Lithic or
+Stripe.
+
 **Use `127.0.0.1`, not `localhost`, if anything looks wrong.** They are different
 origins to a browser, and on this machine `localhost` has resolved to a stale
 container before now (see the WORKLOG trap).

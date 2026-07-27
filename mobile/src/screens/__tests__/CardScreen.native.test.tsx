@@ -25,7 +25,12 @@ async function show(routes: Record<string, unknown>) {
     ...routes,
   });
   const view = await renderWithApi(
-    <CardScreen selection={SELECTION} onOpenReveal={jest.fn()} onOpenFund={jest.fn()} />,
+    <CardScreen
+      selection={SELECTION}
+      onOpenReveal={jest.fn()}
+      onOpenFund={jest.fn()}
+      onForget={jest.fn()}
+    />,
     client,
   );
   return { ...view, calls };
@@ -130,7 +135,12 @@ describe('when things are not working', () => {
       fetch: (() => Promise.reject(new TypeError('Network request failed'))) as typeof fetch,
     });
     await renderWithApi(
-      <CardScreen selection={SELECTION} onOpenReveal={jest.fn()} onOpenFund={jest.fn()} />,
+      <CardScreen
+        selection={SELECTION}
+        onOpenReveal={jest.fn()}
+        onOpenFund={jest.fn()}
+        onForget={jest.fn()}
+      />,
       client,
     );
 
@@ -153,11 +163,103 @@ describe('when things are not working', () => {
       },
     });
     await renderWithApi(
-      <CardScreen selection={SELECTION} onOpenReveal={jest.fn()} onOpenFund={jest.fn()} />,
+      <CardScreen
+        selection={SELECTION}
+        onOpenReveal={jest.fn()}
+        onOpenFund={jest.fn()}
+        onForget={jest.fn()}
+      />,
       client,
     );
     const balance = await screen.findByTestId('balance');
 
     expect(balance).toHaveTextContent(/740\.16/);
+  });
+});
+
+
+describe('a card the provider no longer has', () => {
+  /**
+   * The bug this section exists for, found by jp on the first real run.
+   *
+   * `gnosis_pay_mock`'s simulator lives inside the backend process, so its cards die
+   * with it. The selection lives in this device's vault and does not. First launch
+   * worked; every launch after a backend restart showed "Something went wrong / no
+   * such card" with no control on the screen that could do anything about it — a
+   * permanent dead end, fixable only by clearing site data.
+   */
+  async function showMissing(providerId = 'gnosis_pay_mock') {
+    const onForget = jest.fn();
+    const { client } = fakeClient({
+      [`GET /providers/${providerId}/cards/card_1`]: {
+        status: 404,
+        code: 'not_found',
+        detail: 'no such card',
+      },
+    });
+    await renderWithApi(
+      <CardScreen
+        selection={{ providerId, cardId: 'card_1' }}
+        onOpenReveal={jest.fn()}
+        onOpenFund={jest.fn()}
+        onForget={onForget}
+      />,
+      client,
+    );
+    return onForget;
+  }
+
+  it('offers a way out instead of a dead end', async () => {
+    await showMissing();
+
+    expect(await screen.findByTestId('forget')).toBeTruthy();
+  });
+
+  it('clears the selection when asked', async () => {
+    const onForget = await showMissing();
+
+    fireEvent.press(await screen.findByTestId('forget'));
+
+    expect(onForget).toHaveBeenCalled();
+  });
+
+  it('explains why, for a provider whose cards cannot survive a restart', async () => {
+    // Not a generic apology. The reason is a property of the system worth knowing:
+    // an in-process simulator's cards last exactly as long as the process.
+    await showMissing('gnosis_pay_mock');
+
+    expect(await screen.findByText(/inside the backend process/)).toBeTruthy();
+  });
+
+  it('does not blame a restart for a provider that has none', async () => {
+    // Lithic's cards do not vanish when our backend restarts. Saying they might
+    // would send someone looking in the wrong place.
+    await showMissing('lithic');
+
+    await screen.findByTestId('forget');
+    expect(screen.queryByText(/inside the backend process/)).toBeNull();
+    expect(screen.getByText(/deleted at the provider/)).toBeTruthy();
+  });
+
+  it('keeps the selection when the backend is merely unreachable', async () => {
+    // The distinction that makes this safe. "Cannot reach the backend" is a
+    // condition that passes; discarding a good selection over a blip would be a
+    // worse bug than the one being fixed.
+    const client = new StableCardClient({
+      baseUrl: BASE,
+      fetch: (() => Promise.reject(new TypeError('Network request failed'))) as typeof fetch,
+    });
+    await renderWithApi(
+      <CardScreen
+        selection={SELECTION}
+        onOpenReveal={jest.fn()}
+        onOpenFund={jest.fn()}
+        onForget={jest.fn()}
+      />,
+      client,
+    );
+
+    expect(await screen.findByText('Cannot reach the backend')).toBeTruthy();
+    expect(screen.queryByTestId('forget')).toBeNull();
   });
 });

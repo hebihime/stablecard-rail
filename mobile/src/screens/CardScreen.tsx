@@ -26,14 +26,27 @@ import { cardStateStyle, palette, radius, spacing, text } from '../ui/theme';
 /** Slow: a card's state changes when this screen changes it, not on its own. */
 const BALANCE_POLL_MS = 15_000;
 
+/**
+ * Provider ids whose cards do not survive a backend restart.
+ *
+ * `gnosis_pay_mock`'s simulator runs *inside the backend process* (SPEC.md §3.2 —
+ * "a small in-process simulator … so the full pipeline works offline"), so its cards
+ * live exactly as long as that process does. Naming the set rather than testing for
+ * one provider, because a second in-process adapter would have the same property.
+ */
+const IN_PROCESS_PROVIDERS = new Set(['gnosis_pay_mock']);
+
 export function CardScreen({
   selection,
   onOpenReveal,
   onOpenFund,
+  onForget,
 }: {
   selection: CardSelection;
   onOpenReveal: () => void;
   onOpenFund: () => void;
+  /** Drop the stored selection and go back to choosing a provider. */
+  onForget: () => void;
 }) {
   const client = useClient();
   const { providerId, cardId } = selection;
@@ -79,6 +92,29 @@ export function CardScreen({
     );
   }
   if (card.data === null) {
+    // A stored selection the provider does not recognise is not an error to retry —
+    // it is a dead end, and until phase 8 shipped it was a permanent one: the card
+    // id lives in this device's vault and the card itself does not. Recovering has
+    // to be offered here, because there is no other screen to get to.
+    if (isMissingCard(card.error)) {
+      return (
+        <Screen>
+          <Section title="That card is gone">
+            <Text style={text.body}>
+              This app remembered a card at{' '}
+              <Text style={text.mono}>{providerId}</Text>, and the provider no longer has
+              it.
+            </Text>
+            <Text style={text.muted}>
+              {IN_PROCESS_PROVIDERS.has(providerId)
+                ? 'Expected, for this provider: its simulator runs inside the backend process, so restarting the backend loses every card it had. The card id is stored on this device, which is why it outlived the card.'
+                : 'The card may have been deleted at the provider, or this device is pointed at a different account than the one it was created in.'}
+            </Text>
+            <Button label="Choose a provider and start over" onPress={onForget} testID="forget" />
+          </Section>
+        </Screen>
+      );
+    }
     return (
       <Screen>
         <ErrorNotice error={card.error} onRetry={card.refresh} />
@@ -171,6 +207,21 @@ export function CardScreen({
         )}
       </Section>
     </Screen>
+  );
+}
+
+/**
+ * Did the provider say this card does not exist?
+ *
+ * `not_found` covers a card the provider has never heard of; `unknown_provider`
+ * covers a selection naming an adapter that is no longer registered, which is the
+ * same dead end reached a different way. Anything else — unreachable, a 502, a
+ * timeout — is a condition that may pass, and offering to discard the card for one
+ * of those would throw away a perfectly good selection over a blip.
+ */
+function isMissingCard(error: unknown): boolean {
+  return (
+    error instanceof ApiError && (error.code === 'not_found' || error.code === 'unknown_provider')
   );
 }
 

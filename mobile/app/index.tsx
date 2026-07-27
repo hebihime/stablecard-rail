@@ -18,7 +18,7 @@ import { Loading, Screen } from '../src/ui/components';
 
 export default function CardRoute() {
   const router = useRouter();
-  const { selection, ready, select } = useSession();
+  const { selection, ready, select, forget } = useSession();
 
   const onCreated = useCallback(
     (created: CardSelection) => {
@@ -45,6 +45,9 @@ export default function CardRoute() {
       }}
       onOpenFund={() => {
         router.push('/fund');
+      }}
+      onForget={() => {
+        void forget();
       }}
     />
   );
