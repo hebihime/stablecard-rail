@@ -147,4 +147,15 @@ module.exports = {
     },
   ],
   collectCoverageFrom: ['src/**/*.{ts,tsx}', 'modules/**/src/**/*.{ts,tsx}'],
+  /**
+   * Twenty seconds, not Jest's five.
+   *
+   * The first test in a React Native suite pays for loading the whole module graph
+   * — react-native, expo-router, the Solana client where it is used — before it
+   * runs an assertion. Locally that is under a second; on a shared CI runner it
+   * crossed five and failed the *first* test in a file while every later one passed,
+   * which reads as a flaky test rather than as a cold start. Raising the ceiling
+   * changes nothing about what is asserted; the suite still finishes in seconds.
+   */
+  testTimeout: 20_000,
 };

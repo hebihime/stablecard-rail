@@ -119,8 +119,11 @@ jobs:
         env:
           EXPO_PUBLIC_DEMO: "1"
 
+      # Not `if: always()`: when an earlier step fails there is no `dist` to upload,
+      # and the missing-path warning is an annotation on a run that already has a
+      # real failure to read.
       - name: Upload web build
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: web-build
