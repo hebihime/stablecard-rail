@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -82,6 +83,16 @@ class Settings(BaseSettings):
     #: so it is what a cardholder expects to be asked for.
     otp_code_digits: int = 6
 
+    # --- cross-origin access, for the phase-8 web client -------------------
+    #: Origins the browser build is served from. Both spellings of the Expo dev
+    #: server by default, because `localhost` and `127.0.0.1` are different origins
+    #: to the same-origin policy and a browser sends whichever is in the address bar.
+    #: A deployed web build adds its own origin here.
+    cors_allowed_origins: tuple[str, ...] = (
+        "http://localhost:8081",
+        "http://127.0.0.1:8081",
+    )
+
     # --- the PSE-style card reveal (SPEC.md §9.2) --------------------------
     #: Lifetime of the token our backend mints for a client to exchange. Sixty
     #: seconds because that is what Gnosis Pay's own ephemeral token gets, and the
@@ -100,6 +111,25 @@ class Settings(BaseSettings):
     worker_first_attempt_after_seconds: float = 3.0
     #: Seconds between passes when the worker runs as a loop rather than --once.
     worker_interval_seconds: float = 5.0
+
+    @field_validator("cors_allowed_origins")
+    @classmethod
+    def _refuse_wildcard_origin(cls, origins: tuple[str, ...]) -> tuple[str, ...]:
+        """`*` is refused, and this is not a style preference.
+
+        This API has no authentication (docs/ARCHITECTURE.md §11.6). A wildcard
+        therefore means any page in any tab of a browser on a machine running the
+        demo can read a balance, mint a reveal token, and answer a 3DS challenge.
+        Adding a real origin is one env var; a wildcard is a different thing, so it
+        has to be impossible rather than merely discouraged.
+        """
+        if "*" in origins:
+            raise ValueError(
+                "CORS_ALLOWED_ORIGINS may not contain the wildcard '*': this API has "
+                "no authentication, so any origin allowed is an origin in full control. "
+                "List the origins the web build is actually served from."
+            )
+        return origins
 
 
 @lru_cache

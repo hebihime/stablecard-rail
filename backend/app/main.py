@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,6 +73,22 @@ def create_app() -> FastAPI:
         docs_url="/docs",
     )
     app.state.environment = settings.environment
+    # The phase-8 client is one codebase built for native and web (SPEC.md §9,
+    # docs/ARCHITECTURE.md §12.6), and the web half runs on an origin of its own.
+    # Nothing before it needed this: a provider posting a webhook is not a browser.
+    #
+    # `allow_credentials=False` because there is nothing to send — no cookie, no
+    # session — and turning it on would quietly make a future auth mechanism
+    # cross-origin by default. Note that this gates HTTP only: `/ws/otp` accepts a
+    # connection from any origin, which is a property of WebSockets rather than of
+    # this configuration (tests/test_cors.py has the long version).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(settings.cors_allowed_origins),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     # Phase 5's consumer. `webhooks/dispatch` holds subscriptions process-wide and
     # deliberately registers none itself (docs/ARCHITECTURE.md §3.10), so this is
     # where the funding side is connected: without it a settlement is verified,
