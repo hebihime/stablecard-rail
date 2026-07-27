@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -55,6 +56,8 @@ from app.issuers.gnosis_pay_mock.signing import (
     public_key_document,
     sign,
 )
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_ID = "gnosis_pay_mock"
 
@@ -294,6 +297,14 @@ class SafeDeposit:
     received_at: datetime
     #: Our funding intent, once `confirm_funding` has attributed this deposit.
     funding_ref: str | None = None
+    #: How this provider learned of the deposit, when it learned from a chain.
+    #:
+    #: `None` for a simulated deposit. Set when the Safe is a real address and the
+    #: balance was read: a balance read cannot name the transaction that caused it,
+    #: and inventing a plausible hash would be the one dishonest field in this
+    #: object. So it names what was actually done — the token, the address and the
+    #: block — and `tx_hash` carries the same string rather than a fiction.
+    evidence: str | None = None
 
 
 @dataclass(slots=True)
@@ -361,6 +372,7 @@ class GnosisPaySimulator:
         signing_key: Ed25519PrivateKey | None = None,
         clock: Callable[[], datetime] | None = None,
         program: str = "stablecard-demo",
+        safe_address: str | None = None,
     ) -> None:
         #: The private half of the webhook keypair. Only the provider holds one —
         #: the adapter verifies with the published public half, exactly as a
@@ -374,6 +386,7 @@ class GnosisPaySimulator:
         self._cards: dict[str, CardRecord] = {}
         self._tokens: dict[str, str] = {}
         self._deposits: list[SafeDeposit] = []
+        self._safe_address = safe_address
         self._transactions: dict[str, TransactionRecord] = {}
         #: `funding_ref` -> the result returned the first time. The whole of
         #: `fund_card` idempotency (SPEC.md §10) is this dictionary.
@@ -488,7 +501,11 @@ class GnosisPaySimulator:
             first_name=first_name,
             last_name=last_name,
             external_ref=external_ref,
-            safe_address=safe_address_for(user_id, program=self._program),
+            # A configured Safe overrides the derived one. When the Safe is a real
+            # address there is exactly one of it: a Safe per cardholder is more
+            # faithful and would need a funded address per cardholder, which is a
+            # cost the demo cannot pay (docs/ARCHITECTURE.md §13.4).
+            safe_address=self._safe_address or safe_address_for(user_id, program=self._program),
             currency=SAFE_CURRENCIES[safe_currency],
             spendable_units=0,
             held_units=0,
@@ -576,6 +593,103 @@ class GnosisPaySimulator:
         if confirmed:
             user.spendable_units += units
         return deposit
+
+    def reconcile_safe(
+        self, safe_address: str, *, onchain_units: int, evidence: str
+    ) -> SafeDeposit | None:
+        """Make this provider's view of the Safe agree with the chain's.
+
+        The on-chain counterpart of `receive_onchain_deposit`, and the difference is
+        the whole point of SPEC.md §3.2's revision: one is *told* money arrived, this
+        one *looks*.
+
+        **A balance is a pool, not a deposit, and getting that wrong was a real bug.**
+        The first version of this recorded a fresh deposit for each increase it saw,
+        which fragments one arrival across however many times the balance happened to
+        be read — and `_claimable_deposit` matches a single deposit against an amount,
+        so 1 USDC observed twice could not fund a 2 USDC intent that 2 USDC observed
+        once could. So there is exactly **one unattributed deposit per Safe**, resized
+        to whatever the chain shows beyond what has already been attributed.
+
+        **The invariant: unattributed units == max(0, on-chain − attributed).**
+        Attribution to cards is bounded by unattributed deposits already, so bounding
+        those by the chain bounds the cards by the chain. That is what a
+        crypto-deposit issuer enforces, and unlike a simulation it can be checked
+        against a public RPC by anyone.
+
+        The pool shrinks as well as grows — money that left the Safe is money no card
+        can claim. What is never touched is an **attributed** deposit: that money did
+        arrive and a card was funded with it, and un-seeing it would make an existing
+        funding a lie rather than correcting one. A Safe that spends needs the
+        double-entry accounting a real issuer keeps; docs/ARCHITECTURE.md §13.3 says
+        so rather than leaving it to be discovered.
+
+        Returns the pool when it changed, `None` when the chain shows nothing new.
+        """
+        user_id = self._safes.get(safe_address)
+        if user_id is None:
+            raise IssuerError(f"no Safe at this provider for address {safe_address!r}")
+        user = self._users[user_id]
+
+        attributed = sum(
+            deposit.amount_units
+            for deposit in self._deposits
+            if deposit.safe_address == safe_address and deposit.funding_ref is not None
+        )
+        pool = self._onchain_pool(safe_address)
+        target = max(0, onchain_units - attributed)
+        held = pool.amount_units if pool is not None else 0
+        if target == held:
+            return None
+        if target < held:
+            logger.info(
+                "Safe %s holds %s units on chain against %s attributed; unattributed "
+                "pool %s -> %s (the Safe has spent or moved funds)",
+                safe_address,
+                onchain_units,
+                attributed,
+                held,
+                target,
+            )
+
+        if pool is None:
+            pool = SafeDeposit(
+                deposit_id=self._next("dep"),
+                # The evidence, not a manufactured hash. See the field's comment.
+                tx_hash=evidence,
+                safe_address=safe_address,
+                amount_units=target,
+                currency=user.currency,
+                # A balance read at a mined block *is* the confirmation. There is no
+                # later moment at which it becomes more true.
+                confirmed=True,
+                received_at=self._now(),
+                evidence=evidence,
+            )
+            self._deposits.append(pool)
+        else:
+            pool.amount_units = target
+            pool.tx_hash = evidence
+            pool.evidence = evidence
+            pool.received_at = self._now()
+        user.spendable_units += target - held
+        return pool
+
+    def _onchain_pool(self, safe_address: str) -> SafeDeposit | None:
+        """The one unattributed deposit that tracks a real Safe's balance.
+
+        Identified by having evidence and no `funding_ref`: a simulated deposit has
+        no evidence, so the two kinds never get confused in a process that has used
+        both — which the demo does, and the suite does.
+        """
+        for deposit in self._deposits:
+            if (
+                deposit.safe_address == safe_address
+                and deposit.funding_ref is None
+                and deposit.evidence is not None
+            ):
+                return deposit
+        return None
 
     def confirm_deposit(self, deposit_id: str) -> SafeDeposit:
         """Promote a deposit to `finalized`, making it spendable."""
@@ -678,19 +792,54 @@ class GnosisPaySimulator:
     def _claimable_deposit(self, user: UserRecord, units: int) -> SafeDeposit | None:
         """Oldest confirmed, unattributed deposit that covers `units`.
 
-        Whole-deposit attribution: a larger deposit is consumed entirely rather
-        than split. Netting a bridged amount against its fees, and splitting the
-        remainder, is phase 6's reconciliation problem (SPEC.md §11).
+        **A transfer is indivisible; an observed balance is not.** Which of the two a
+        deposit record is decides whether it can be split, and the distinction is
+        real rather than convenient:
+
+        * A simulated deposit stands for one transfer that happened. Splitting it
+          would invent two transfers, so a larger one is consumed whole and netting
+          the remainder against fees is phase 6's reconciliation problem (SPEC.md
+          §11).
+        * An on-chain pool (`evidence` set) stands for *a balance*, read from a chain.
+          A balance has no units that belong together, so taking exactly what a
+          funding needs and leaving the rest is not a split — it is the only correct
+          reading. Consuming 0.35 USDC to fund $0.20 was the first behaviour here,
+          and it silently stranded 0.15 that the chain plainly still held.
         """
         for deposit in self._deposits:
             if (
-                deposit.safe_address == user.safe_address
-                and deposit.confirmed
-                and deposit.funding_ref is None
-                and deposit.amount_units >= units
+                deposit.safe_address != user.safe_address
+                or not deposit.confirmed
+                or deposit.funding_ref is not None
+                or deposit.amount_units < units
             ):
+                continue
+            if deposit.evidence is None or deposit.amount_units == units:
                 return deposit
+            return self._take_from_pool(deposit, units)
         return None
+
+    def _take_from_pool(self, pool: SafeDeposit, units: int) -> SafeDeposit:
+        """Carve exactly `units` out of an observed balance, leaving the remainder.
+
+        The carved record keeps the pool's evidence: both halves were learned from
+        the same read, and that read is the honest answer to "how do you know?".
+        """
+        pool.amount_units -= units
+        claimed = SafeDeposit(
+            deposit_id=self._next("dep"),
+            tx_hash=pool.tx_hash,
+            safe_address=pool.safe_address,
+            amount_units=units,
+            currency=pool.currency,
+            confirmed=True,
+            received_at=pool.received_at,
+            evidence=pool.evidence,
+        )
+        # Before the pool, so `_onchain_pool` keeps finding the unattributed one and
+        # the ordering of `deposits()` stays oldest-first.
+        self._deposits.insert(self._deposits.index(pool), claimed)
+        return claimed
 
     def spendable(self, user_id: str) -> Money:
         user = self._require_user(user_id)

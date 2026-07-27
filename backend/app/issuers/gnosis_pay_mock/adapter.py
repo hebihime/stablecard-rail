@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,6 +46,7 @@ from app.issuers.base import (
     WebhookParseError,
 )
 from app.issuers.gnosis_pay_mock.config import get_gnosis_pay_mock_settings
+from app.issuers.gnosis_pay_mock.safe import SafeBalanceReader, safe_reader_from_settings
 from app.issuers.gnosis_pay_mock.signing import (
     DEFAULT_TOLERANCE_SECONDS,
     TIMESTAMP_HEADER,
@@ -63,6 +65,8 @@ from app.issuers.gnosis_pay_mock.simulator import (
     SafeCurrency,
     to_money,
 )
+
+logger = logging.getLogger(__name__)
 
 #: Provider `eventType` -> our normalized type (SPEC.md §3.3). Anything absent
 #: from this map becomes `UNMAPPED`; it is never dropped. `card.transaction.cleared`
@@ -116,13 +120,20 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
         signing_key: Ed25519PrivateKey | None = None,
         signature_tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS,
         clock: Callable[[], datetime] | None = None,
+        safe_reader: SafeBalanceReader | None = None,
+        safe_address: str | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._tolerance_seconds = signature_tolerance_seconds
         # The key goes to the *simulator*, which is the party that signs. This
         # adapter holds no private key: `verify_webhook` reads the public half back
         # out, which is all a real partner integration ever has.
-        self._simulator = GnosisPaySimulator(signing_key=signing_key, clock=self._clock)
+        self._simulator = GnosisPaySimulator(
+            signing_key=signing_key, clock=self._clock, safe_address=safe_address
+        )
+        # `None` is the whole default: no reader, no network, and every existing
+        # test and the offline demo behave exactly as before.
+        self._safe_reader = safe_reader
 
     @classmethod
     def from_settings(cls) -> GnosisPayMockAdapter:
@@ -134,7 +145,12 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
         (`config.py`).
         """
         settings = get_gnosis_pay_mock_settings()
-        return cls(signature_tolerance_seconds=settings.signature_tolerance_seconds)
+        return cls(
+            signature_tolerance_seconds=settings.signature_tolerance_seconds,
+            safe_reader=safe_reader_from_settings(settings),
+            # When the Safe is a real address, every Safe *is* that address.
+            safe_address=settings.safe_address or None,
+        )
 
     @property
     def simulator(self) -> GnosisPaySimulator:
@@ -228,8 +244,47 @@ class GnosisPayMockAdapter(CardIssuerAdapter):
         `PENDING` means the deposit has not confirmed yet, and the engine should
         wait rather than retry differently — there is no API call that would make
         the money arrive sooner.
+
+        **When the Safe is a real address, the chain is read first** (SPEC.md §3.2,
+        revised). That is the difference between modelling the crypto-deposit funding
+        model and executing it: `PENDING` stops meaning "the simulator has not been
+        told" and starts meaning "the chain does not show it yet". Everything after
+        the read is unchanged, including replay under `funding_ref` — the chain
+        supplies evidence, and attribution stays the simulator's business.
         """
+        await self._reconcile_safe_if_onchain(card_id)
         return self._simulator.confirm_funding(card_id, amount, funding_ref)
+
+    async def _reconcile_safe_if_onchain(self, card_id: str) -> None:
+        """Read the Safe's ERC-20 balance and record anything not yet seen.
+
+        A no-op unless `GNOSIS_PAY_MOCK_SAFE_ADDRESS` is set, which is what keeps the
+        offline demo offline and the suite free of network calls.
+
+        Failures here are deliberately **not** swallowed. An unreadable chain is not
+        the same as an empty Safe, and treating it as one would answer `PENDING` for
+        money that has arrived — the engine would then retry to its cap and fail an
+        intent over a node having a bad minute. `EvmRpcError` carries `retryable`, so
+        letting it out is what lets the engine wait properly.
+        """
+        if self._safe_reader is None:
+            return
+        card = self._simulator.get_card(card_id)
+        user = self._simulator.get_user(card.user_id)
+        observed = await self._safe_reader.balance_of(user.safe_address)
+        recorded = self._simulator.reconcile_safe(
+            user.safe_address,
+            onchain_units=observed.units,
+            evidence=observed.evidence,
+        )
+        if recorded is not None:
+            logger.info(
+                "Safe %s: recorded %s new %s units from chain (%s)",
+                user.safe_address,
+                recorded.amount_units,
+                recorded.currency.symbol,
+                observed.evidence,
+            )
 
     def _to_card(self, record: CardRecord, *, memo: str | None = None) -> Card:
         user = self._simulator.get_user(record.user_id)

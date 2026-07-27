@@ -2823,3 +2823,130 @@ Stated plainly, because the alternative is letting it be assumed.
 - **No end-to-end run against a live backend from a device.** The screens are tested
   against a `StableCardClient` whose `fetch` is stubbed by route, and the backend's
   1666 tests cover the other side. What is untested is the join.
+
+---
+
+## 13. A Safe that is a real address (SPEC.md §3.2 and §5.2, revised)
+
+Not a phase. It came out of jp asking, after phase 8, whether the pipeline could be
+made to work *for real* on testnets only — and the answer turned out to have a hard
+edge worth recording as carefully as anything else here.
+
+### 13.1 The wall, and it is not ours
+
+Legs one to three were already real, which the chain says more clearly than any note:
+a devnet USDC deposit, a Wormhole VAA, and **0.35 wrapped USDC sitting on BSC
+testnet** at the redeemer address from a transfer that really completed.
+
+Leg four cannot be made real anywhere. **No card issuer accepts testnet stablecoins**,
+and that is not an oversight by any of them — an issuing balance must be backed by
+something with value, and a testnet token has none by definition. So the join between
+real crypto and a real card cannot be testnet on both sides.
+
+The one product that would close it was checked rather than assumed:
+
+- **Stripe stablecoin-backed Issuing** (with Bridge) exists, supports Solana, and is
+  in **private preview**. Their docs are explicit that even a sandbox is gated:
+  *"Test your integration in a sandbox environment using your US platform account.
+  Contact Stripe sales to configure your sandbox with stablecoin-backed Issuing."*
+  The same class of gate as Lithic's Out of Band challenge orchestration (§11.9).
+- And the Bridge path is **mainnet-only** regardless: their Solana program is deployed
+  at `cardWArqhdV5jeRXXjUti7cHAa4mj41Nj3Apc6RPZH2` on mainnet. There is no devnet
+  deployment to point at.
+
+So the simulated bridge stops being "unfinished" and becomes "this is where the world
+ends", which is a different and more useful thing for this document to say.
+
+### 13.2 Why a fiat rail and its crypto are not the same money
+
+The phrase "not the same money" is loose, because both sides of a sandbox are
+worthless. The precise distinction is **custody**.
+
+In a real stablecoin card the USDC sits in an account the issuer controls, and the
+card's spending power *is a claim on that balance*. One pot, two views: a debit on one
+side is the same event as a credit on the other, which is what makes reconciliation
+possible at all.
+
+Devnet USDC and a Stripe test balance have no such relationship. The test balance is
+topped up by clicking **Add funds**; nothing done with devnet USDC affects it. If the
+pipeline bridges 100 and then raises the balance by 100, *we asserted that*, and no
+component could tell if we had raised it by 200. That is also why `SETTLED` is
+unreachable (§9.12): no provider echoes a `funding_ref`, so nothing ties a card
+transaction back to a deposit. Same missing link, different hat.
+
+**This is not a testnet limitation.** It is equally true on mainnet for Lithic and
+Stripe: real USDC plus a bank-funded Issuing balance is still two pots, because
+somebody sold the crypto and wired dollars. The `FIAT_RAIL` model is inherently
+"convert, then fund". The "same money" model exists only where the card spends *from*
+the stablecoin balance — Stripe+Bridge, and **Gnosis Pay**, where the card spends from
+a Safe and the Safe *is* the balance.
+
+Which is why SPEC.md picked Gnosis Pay as the `CRYPTO_DEPOSIT` exemplar and why
+`fund_card` there verifies a deposit rather than making an API call. The mock was
+modelling the right architecture all along. It simply could not be executed.
+
+**So this revision makes it executable.** For a `CRYPTO_DEPOSIT` provider there is no
+second pot to reconcile against, so reading the Safe's balance is the one place in
+this project where the funding model becomes a fact instead of an assertion — checkable
+against a public RPC, by anyone, with no credentials.
+
+### 13.3 A balance is a pool, and two bugs came from forgetting it
+
+`GNOSIS_PAY_MOCK_SAFE_ADDRESS` is empty by default, and everything about the offline
+demo and the suite is unchanged when it is. Set, and `fund_card` reads the address's
+ERC-20 balance before attributing anything. The invariant:
+
+> **unattributed units == max(0, on-chain balance − already attributed)**
+
+Attribution to cards was already bounded by unattributed deposits, so bounding those
+by the chain bounds the cards by the chain. **This provider cannot attribute more to
+cards than the chain shows.**
+
+Getting there took two corrections, both found by running it rather than reading it:
+
+1. **Recording a deposit per observed increase fragments one arrival.** The first
+   version added a new deposit for each rise in the balance, and `_claimable_deposit`
+   matches a *single* deposit against an amount — so 1 USDC seen twice could not fund
+   what 2 USDC seen once could. There is now exactly one unattributed pool per Safe,
+   resized on each read.
+2. **A transfer is indivisible; an observed balance is not.** Funding $0.20 against the
+   real 0.35 USDC consumed the whole 0.35, silently stranding 0.15 the chain plainly
+   still held. A balance has no units that belong together, so a funding now takes
+   exactly what it needs and leaves the rest — while a *simulated* deposit, which
+   stands for one transfer that happened, is still consumed whole, because splitting it
+   would invent two transfers.
+
+What the pool deliberately does not do is retract an **attributed** deposit. A falling
+balance shrinks the unattributed pool — money that left is money no card can claim —
+but a deposit that funded a card is left alone: un-seeing it would make an existing
+funding a lie rather than correcting one. A Safe that *spends* needs the double-entry
+accounting a real issuer keeps, and this demo's Safe only receives.
+
+Two smaller decisions worth their lines. The evidence recorded against an on-chain
+deposit **names the read, not a transaction** — a balance read cannot know which
+transfer produced the balance, and manufacturing a plausible hash would put a fiction
+in the one field a human reconciles with. And an unreadable chain is **allowed to
+raise**: answering `PENDING` for a node that could not be reached says "the money has
+not arrived" about money that may well have, and the engine would then retry to its cap
+and fail an intent over a bad minute at a public RPC. `EvmRpcError` carries `retryable`,
+which is what lets the engine wait properly.
+
+### 13.4 One Safe, and that is a cost rather than a simplification
+
+When configured, every cardholder's Safe is the same address. Gnosis Pay gives each
+user their own, and matching that would need a funded address per cardholder — testnet
+gas, per user, for a demo. One address is the honest trade and is stated here rather
+than left to be noticed. Unset, Safe addresses are still derived per cardholder as
+before, and a test holds both halves.
+
+### 13.5 What this is verified against
+
+- **The invariant, twenty tests, mocked RPC.** The suite still calls no network; that
+  rule predates this and did not get an exception.
+- **The read, against BSC testnet.** 0.35 USDC observed at the real address, $0.20
+  then $0.15 funded, and the next cent `PENDING` — the invariant holding on real chain
+  state, with nothing stranded.
+- **Not verified:** a full engine run from a fresh devnet deposit through Wormhole to a
+  card funded on the delivered balance. Each leg is verified on its own and the join is
+  not. It needs a bridge transfer executed with the fund screen open, which is a demo
+  to record rather than a thing to build.

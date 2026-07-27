@@ -71,6 +71,20 @@ Design rule (mirrors the target role's requirement): **adding a new issuer = one
 2. **`stripe_issuing.py`** — Stripe Issuing test mode. Same lifecycle; verify `Stripe-Signature`; use Stripe's test helpers to simulate authorizations and 3DS-style flows where available.
 3. **`gnosis_pay_mock.py`** — a mock adapter modeling the Gnosis Pay partner pattern, with its API surface shaped by Gnosis Pay's public documentation (https://docs.gnosispay.com — they expose an `/llms.txt` index; read the card-order, card-management, and PSE pages before writing this adapter). Key characteristics to model: `CRYPTO_DEPOSIT` funding via a per-user Safe smart account on an EVM chain (funding = confirmed stablecoin deposit to the Safe, not an API call — `fund_card` therefore verifies/records the on-chain deposit rather than moving money); card lifecycle endpoints (order, activate, freeze, report lost/cancel); and a PSE-style secure reveal (backend issues a short-lived ephemeral token, client renders card data — see §9). Runs a small in-process simulator with its own signed webhooks so the full pipeline works offline. This adapter proves the abstraction covers both `FIAT_RAIL` and `CRYPTO_DEPOSIT` funding models, and doubles as prep for the real integration: it is a faithful shadow of the provider AlemX actually uses.
 
+   **Revised after phase 8.** The Safe may be a **real address on a testnet**, set via
+   `GNOSIS_PAY_MOCK_SAFE_ADDRESS`. When it is, `fund_card` reads that address's ERC-20
+   balance instead of being told a deposit landed, and this provider cannot attribute
+   more to cards than the chain shows. Unset — the default — keeps the in-process Safe,
+   so the offline demo and the test suite are unchanged.
+
+   The reason for the revision: no card issuer anywhere accepts testnet stablecoins, so
+   the join between real crypto and a real card cannot be testnet on both sides. Stripe's
+   stablecoin-backed Issuing (with Bridge) is the one product that would close it, and it
+   is private preview — sales-gated even for a sandbox — with Bridge's on-chain program
+   deployed only on mainnet. For a `CRYPTO_DEPOSIT` provider there is no second pot to
+   reconcile against, so reading the Safe is the one place the funding model can be made
+   *executable* rather than modelled. See docs/ARCHITECTURE.md §13.
+
 ### 3.3 Normalized event model
 
 `CardEvent` covers: `authorization`, `authorization_reversal`, `settlement`, `refund`, `chargeback`, `three_ds_challenge`, `card_lifecycle`. Every adapter maps provider payloads into this model. Unknown provider events are ledgered as `unmapped` — never dropped silently.
@@ -98,6 +112,12 @@ Pipeline: raw-body capture → adapter `verify_webhook` (reject 401 on failure) 
    - `debridge.py` (or another live protocol — research at build time which bridge/aggregator currently supports a Solana→Gnosis Chain route, since Gnosis Chain is the destination in the real product; LiFi/Jumper aggregate routes and deBridge lists Gnosis support. Testnet routes to Gnosis's Chiado testnet may not exist — if so, implement the real adapter against any available Solana-devnet→EVM-testnet route to prove the mechanics, and document the mainnet route choice in ARCHITECTURE.md)
    - `simulated.py` — deterministic simulator with configurable latency/failure injection, so the end-to-end demo never depends on third-party testnet uptime.
    The engine treats them identically. `BRIDGING → BRIDGED` on destination confirmation.
+
+   **Revised after phase 8.** The simulator remains the default for a recorded demo, and
+   the real path is now real end to end where a testnet can carry it: a devnet USDC
+   deposit, a Wormhole transfer, a BSC-testnet redemption, and a `fund_card` that reads
+   the delivered balance off that chain (§3.2, revised). The one seam left is the card
+   itself, and no testnet can close it — see docs/ARCHITECTURE.md §13.2.
 3. **Card funding**: engine calls the intent's issuer adapter `fund_card` with an idempotent `funding_ref` (the intent id). `FUNDING → FUNDED`.
 4. **Settlement**: `settlement` webhook events reconcile against the intent → `SETTLED`.
 

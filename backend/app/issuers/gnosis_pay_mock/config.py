@@ -34,6 +34,26 @@ class GnosisPayMockSettings(BaseSettings):
     #: Rejection window for a delivery's signature timestamp, in either direction.
     signature_tolerance_seconds: int = DEFAULT_TOLERANCE_SECONDS
 
+    # --- a Safe that is a real address (SPEC.md §3.2, revised) --------------
+    #: When set, the Safe is this address on a real chain and `fund_card` reads its
+    #: ERC-20 balance instead of being told a deposit landed. Empty keeps the
+    #: in-memory Safe, which is what the offline demo and the whole suite use.
+    #:
+    #: Not a credential. It is an address, and the key that pays gas for it lives
+    #: in the chain settings as `EVM_REDEEMER_PRIVATE_KEY`.
+    safe_address: str = ""
+    #: The ERC-20 the Safe is denominated in. Wormhole's wrapped devnet USDC on BSC
+    #: testnet by default — the token a real bridge transfer delivers.
+    safe_token_address: str = "0x51a3cc54ea30da607974c5d07b8502599801ac08"
+    #: Its decimals. Six for USDC, and read rather than assumed because getting it
+    #: wrong is a hundredfold error rather than a rounding one.
+    safe_token_decimals: int = 6
+
+    @property
+    def safe_is_onchain(self) -> bool:
+        """Whether this provider's Safe is a real address rather than an object."""
+        return bool(self.safe_address)
+
 
 @lru_cache
 def get_gnosis_pay_mock_settings() -> GnosisPayMockSettings:
