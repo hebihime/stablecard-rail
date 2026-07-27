@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import { resolveConfig } from '../config';
 import { StableCardClient } from './client';
+import { demoFetch } from './demoBackend';
 
 const ClientContext = createContext<StableCardClient | null>(null);
 
@@ -23,10 +24,20 @@ export function ApiProvider({
   /** Injected by tests and by the demo build; resolved from config otherwise. */
   client?: StableCardClient;
 }) {
-  const resolved = useMemo(
-    () => client ?? new StableCardClient({ baseUrl: resolveConfig().apiBaseUrl }),
-    [client],
-  );
+  const resolved = useMemo(() => {
+    if (client !== undefined) {
+      return client;
+    }
+    const config = resolveConfig();
+    // Demo mode swaps `fetch` and nothing else, so the client the app runs with is
+    // the production one — path building, the error envelope, the `unreachable`
+    // mapping and every retry rule included. A separate demo *client* would have
+    // quietly replaced all of that.
+    return new StableCardClient({
+      baseUrl: config.apiBaseUrl,
+      ...(config.demoMode ? { fetch: demoFetch() } : {}),
+    });
+  }, [client]);
   return <ClientContext.Provider value={resolved}>{children}</ClientContext.Provider>;
 }
 

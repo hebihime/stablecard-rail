@@ -82,3 +82,47 @@ jobs:
           name: coverage-xml
           path: backend/coverage.xml
           if-no-files-found: warn
+
+  mobile:
+    name: mobile (types, tests, web build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check (tsc --noEmit)
+        run: npm run typecheck
+
+      # Every suite runs once per platform (jest-expo's multi-project preset), so
+      # this covers the three secure-storage backends rather than whichever one the
+      # runner happens to resolve.
+      - name: Tests
+        run: npm run test:ci
+
+      # The Vercel deliverable, built here so a broken static export fails in CI
+      # rather than on a deploy. Demo mode, because CI has no backend — and that is
+      # the build a stranger clicking the link gets.
+      - name: Web build
+        run: npm run build:web
+        env:
+          EXPO_PUBLIC_DEMO: "1"
+
+      - name: Upload web build
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-build
+          path: mobile/dist
+          if-no-files-found: warn

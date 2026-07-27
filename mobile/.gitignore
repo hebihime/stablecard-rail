@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Expo's static web export. Rebuilt by CI and by Vercel; never committed.
+/dist
