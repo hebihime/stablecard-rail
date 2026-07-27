@@ -11,6 +11,8 @@ import itertools
 import pytest
 
 from app.funding.states import (
+    FAILURE_STATES,
+    HAPPY_PATH,
     RETRYABLE_STATES,
     TRANSITIONS,
     FundingState,
@@ -37,7 +39,12 @@ EXPECTED: dict[FundingState, set[FundingState]] = {
     S.FAILED_SETTLEMENT: set(),
 }
 
-HAPPY_PATH = [
+#: SPEC.md §5.1, transcribed by hand. The golden copy, in the same spirit as
+#: EXPECTED above: written from the spec rather than derived, so that
+#: `states.HAPPY_PATH` — which *is* derived — has something independent to be
+#: checked against. Phase 8 needed the sequence in the app and derived it from the
+#: table rather than adding a third copy.
+SPEC_HAPPY_PATH = [
     S.PENDING,
     S.DEPOSIT_CONFIRMED,
     S.BRIDGING,
@@ -70,7 +77,7 @@ def test_is_legal_transition_agrees_with_the_table(frm: FundingState, to: Fundin
 
 
 def test_happy_path_is_walkable_end_to_end() -> None:
-    for frm, to in itertools.pairwise(HAPPY_PATH):
+    for frm, to in itertools.pairwise(SPEC_HAPPY_PATH):
         assert is_legal_transition(frm, to), f"{frm} -> {to} must be legal"
 
 
@@ -129,3 +136,41 @@ def test_no_state_escapes_a_terminal_state() -> None:
 def test_states_are_plain_strings_for_storage() -> None:
     assert FundingState.PENDING == "PENDING"
     assert str(FundingState.FAILED_BRIDGE) == "FAILED_BRIDGE"
+
+
+# ---------------------------------------------------------------- the path ----
+#
+# Phase 8 renders this sequence in the mobile app (SPEC.md §9.3), so it is derived
+# from the table rather than written twice.
+
+
+def test_the_happy_path_is_the_sequence_the_spec_names() -> None:
+    # SPEC.md §5.1, verbatim: PENDING -> DEPOSIT_CONFIRMED -> BRIDGING -> BRIDGED
+    # -> FUNDING -> FUNDED -> SETTLED.
+    assert HAPPY_PATH == tuple(SPEC_HAPPY_PATH)
+
+
+def test_every_step_has_exactly_one_way_onward() -> None:
+    """What makes deriving the path well-defined rather than a guess.
+
+    If a state ever gains a second non-failure successor — a branch in the machine,
+    an optional hop — the derivation would pick one by sort order and the app would
+    render a route that is only sometimes taken. Failing here is the point: the
+    branch is a design decision that needs making, not a list to quietly re-sort.
+    """
+    for state in HAPPY_PATH:
+        onward = {
+            target for target in TRANSITIONS[state] if target != state and not target.is_failure
+        }
+        assert len(onward) <= 1, f"{state} branches to {onward}"
+
+
+def test_the_happy_path_holds_no_failure_state() -> None:
+    # A failure state is not a later stage of the same journey, so asking where
+    # FAILED_BRIDGE sits in this sequence is the wrong question. The app shows a
+    # failed intent by name and reason instead (docs/ARCHITECTURE.md §12.4).
+    assert not FAILURE_STATES & set(HAPPY_PATH)
+
+
+def test_the_happy_path_covers_every_state_that_is_not_a_failure() -> None:
+    assert set(HAPPY_PATH) == set(FundingState) - FAILURE_STATES

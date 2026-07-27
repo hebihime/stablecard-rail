@@ -25,7 +25,17 @@ from app.issuers.base import (
 from app.issuers.registry import UnknownProviderError
 from app.webhooks.receiver import SignatureRejected
 
-__all__ = ["install_exception_handlers"]
+__all__ = ["ResourceNotFound", "install_exception_handlers"]
+
+
+class ResourceNotFound(Exception):
+    """Something of *ours* was asked for and does not exist.
+
+    Distinct from `CardNotFoundError`, which is a provider's word: a funding intent
+    is a row in our database, and raising an issuer error for a miss here would
+    attribute it to an upstream that was never asked. Same 404 and same `code`, so
+    the difference is ours to know and costs a client nothing.
+    """
 
 
 def _problem(status_code: int, code: str, detail: str) -> JSONResponse:
@@ -73,6 +83,7 @@ def install_exception_handlers(app: FastAPI) -> None:
     # Starlette resolves by exact class then walks the MRO.
     app.add_exception_handler(UnknownProviderError, _unknown_provider)
     app.add_exception_handler(CardNotFoundError, _not_found)
+    app.add_exception_handler(ResourceNotFound, _not_found)
     app.add_exception_handler(CardholderNotFoundError, _not_found)
     app.add_exception_handler(IllegalCardTransitionError, _illegal_transition)
     app.add_exception_handler(FundingRejectedError, _funding_rejected)

@@ -32,6 +32,7 @@ from app import __version__
 from app import issuers as _issuer_adapters  # noqa: F401 -- imported for its registrations
 from app.api.cards import router as cards_router
 from app.api.errors import install_exception_handlers
+from app.api.funding import router as funding_router
 from app.api.ledger import router as ledger_router
 from app.api.otp import router as otp_router
 from app.api.reveal import router as reveal_router
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(cards_router)
     app.include_router(webhooks_router)
     app.include_router(ledger_router)
+    app.include_router(funding_router)
     app.include_router(otp_router)
     app.include_router(reveal_router)
     return app

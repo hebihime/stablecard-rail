@@ -30,6 +30,7 @@ from enum import StrEnum
 
 __all__ = [
     "FAILURE_STATES",
+    "HAPPY_PATH",
     "RETRYABLE_STATES",
     "TERMINAL_STATES",
     "TRANSITIONS",
@@ -101,6 +102,38 @@ TERMINAL_STATES: frozenset[FundingState] = frozenset(
 RETRYABLE_STATES: frozenset[FundingState] = frozenset(
     state for state, targets in TRANSITIONS.items() if state in targets
 )
+
+
+def _derive_happy_path() -> tuple[FundingState, ...]:
+    """Walk the table from `PENDING`, ignoring self-loops and failures.
+
+    Derived rather than written out, because SPEC.md §9.3 asks a mobile client to
+    render this sequence and a second copy of it — in a constant here, or worse in
+    TypeScript — is a copy that drifts. Phase 5 added two self-loops without
+    touching the sequence, and a hand-maintained list would have needed checking
+    against the table by eye each time.
+
+    Well-defined only because each state has exactly one non-failure successor;
+    `tests/test_transition_table.py` asserts that, so a future branch in the machine
+    fails there rather than silently picking a branch by sort order.
+    """
+    path = [_S.PENDING]
+    while True:
+        onward = sorted(
+            target
+            for target in TRANSITIONS[path[-1]]
+            if target != path[-1] and not target.is_failure
+        )
+        if not onward:
+            return tuple(path)
+        path.append(onward[0])
+
+
+#: `PENDING -> DEPOSIT_CONFIRMED -> ... -> SETTLED`: the route an intent takes when
+#: nothing goes wrong. Not every intent's route, and deliberately not a state
+#: *order* — a failure state has no place in this sequence and asking where
+#: `FAILED_BRIDGE` sits in it is the wrong question (docs/ARCHITECTURE.md §12.4).
+HAPPY_PATH: tuple[FundingState, ...] = _derive_happy_path()
 
 
 def legal_targets(state: FundingState) -> frozenset[FundingState]:
