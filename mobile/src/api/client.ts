@@ -27,6 +27,7 @@ import type {
   Cardholder,
   ChallengeDecision,
   ChallengeResponse,
+  DepositRoute,
   FundingIntent,
   FundingIntentPage,
   LedgerPage,
@@ -169,6 +170,20 @@ export class StableCardClient {
       'GET',
       `/funding/intents${query({ card_id: options.cardId, limit: options.limit })}`,
     );
+  }
+
+  /**
+   * Claim this service's deposit address for a card, and read it back.
+   *
+   * Idempotent at the backend by design — the fund screen calls it every time it
+   * opens, which is what `funding/routes.py` was written for. The address is not a
+   * parameter: a caller that could name one could point the watcher elsewhere.
+   */
+  claimDepositRoute(providerId: string, cardId: string): Promise<DepositRoute> {
+    return this.request<DepositRoute>('POST', '/funding/deposit-routes', {
+      provider_id: providerId,
+      card_id: cardId,
+    });
   }
 
   // --- 3DS / OTP (SPEC.md §6, §9.4) ----------------------------------------

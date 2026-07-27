@@ -29,20 +29,119 @@
 const nativeOnly = ['/node_modules/', '\\.web\\.test\\.[jt]sx?$'];
 const webOnly = ['/node_modules/', '\\.native\\.test\\.[jt]sx?$'];
 
+/**
+ * Packages Jest must transform rather than skip.
+ *
+ * `node_modules` is untransformed by default, which is right for the thousands of
+ * CommonJS packages and wrong for `@solana/*` and its dependencies: they ship ESM
+ * only, so Jest reaches an `import` statement in a file it decided not to compile
+ * and reports a syntax error inside somebody else's package.
+ *
+ * The preset's own pattern is *extended*, not replaced. Writing a fresh one is the
+ * obvious move and breaks React Native itself — `expo-modules-core` ships
+ * TypeScript sources and stops loading the moment it falls outside the exception
+ * list. So this reads jest-expo's list and inserts into its negative lookahead.
+ */
+function withEsmPackages(patterns, packages) {
+  const [nodeModules, ...rest] = patterns;
+  return [nodeModules.replace('(?!(', `(?!(${packages.join('|')}|`), ...rest];
+}
+
+/**
+ * Teach the preset's Babel transform about `.mjs`.
+ *
+ * Its pattern is `\.[jt]sx?$`, which covers everything React Native ships and none
+ * of the `.mjs` and `.native.mjs` files `@solana/web3.js`'s dependencies are
+ * published as. Without this they land in the "no transform" bucket no matter what
+ * `transformIgnorePatterns` says, and fail with the same syntax error — which is a
+ * genuinely confusing pairing, because the obvious fix looks like it is already
+ * applied.
+ */
+function withMjs(transform) {
+  const babel = transform['\\.[jt]sx?$'];
+  return { ...transform, '\\.mjs$': babel };
+}
+
+const ESM_ONLY = ['@solana', 'jayson', 'superstruct', 'rpc-websockets', 'uuid'];
+
+/**
+ * Packages whose `exports` map Jest's resolver cannot follow.
+ *
+ * `rpc-websockets` publishes CommonJS at `dist/index.cjs` and declares it only
+ * through `exports`, which Node honours and Jest's resolver does not — so
+ * `@solana/web3.js` fails to load with "cannot find module" for a package that is
+ * plainly installed. Pointing at the file Node itself resolves is the whole fix.
+ */
+const RESOLVER_GAPS = {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  '^rpc-websockets$': require.resolve('rpc-websockets'),
+};
+
 module.exports = {
   projects: [
     {
       preset: 'jest-expo/ios',
+      transformIgnorePatterns: withEsmPackages(
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('jest-expo/ios/jest-preset').transformIgnorePatterns,
+        ESM_ONLY,
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      transform: withMjs(require('jest-expo/ios/jest-preset').transform),
+      moduleNameMapper: {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/ios/jest-preset').moduleNameMapper,
+        ...RESOLVER_GAPS,
+      },
+      moduleFileExtensions: [
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/ios/jest-preset').moduleFileExtensions,
+        'mjs',
+      ],
       setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
       testPathIgnorePatterns: nativeOnly,
     },
     {
       preset: 'jest-expo/android',
+      transformIgnorePatterns: withEsmPackages(
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('jest-expo/android/jest-preset').transformIgnorePatterns,
+        ESM_ONLY,
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      transform: withMjs(require('jest-expo/android/jest-preset').transform),
+      moduleNameMapper: {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/android/jest-preset').moduleNameMapper,
+        ...RESOLVER_GAPS,
+      },
+      moduleFileExtensions: [
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/android/jest-preset').moduleFileExtensions,
+        'mjs',
+      ],
       setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
       testPathIgnorePatterns: nativeOnly,
     },
     {
       preset: 'jest-expo/web',
+      transformIgnorePatterns: withEsmPackages(
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('jest-expo/web/jest-preset').transformIgnorePatterns,
+        ESM_ONLY,
+      ),
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      transform: withMjs(require('jest-expo/web/jest-preset').transform),
+      moduleNameMapper: {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/web/jest-preset').moduleNameMapper,
+        ...RESOLVER_GAPS,
+      },
+      moduleFileExtensions: [
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        ...require('jest-expo/web/jest-preset').moduleFileExtensions,
+        'mjs',
+      ],
       setupFilesAfterEnv: ['<rootDir>/jest.setup.ts'],
       testPathIgnorePatterns: webOnly,
     },

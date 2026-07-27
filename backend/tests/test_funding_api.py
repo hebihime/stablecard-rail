@@ -29,6 +29,7 @@ from app.funding.states import FundingState
 from tests.support import SeedIntent
 
 CARD = "card_test_1"
+PROVIDER = "gnosis_pay_mock"
 
 
 async def test_an_intent_reads_back_with_its_money_and_its_references(
@@ -224,3 +225,146 @@ async def test_the_limit_is_honoured(client: httpx.AsyncClient, seed_intent: See
     body = (await client.get("/funding/intents", params={"limit": 1})).json()
 
     assert body["count"] == 1
+
+
+# ----------------------------------------------------------- deposit routes ----
+#
+# Where to send money so it reaches a card (SPEC.md §9.3). The address is derived
+# from this service's own keypair rather than accepted from the caller, which is the
+# property most of these assert.
+
+#: A throwaway devnet keypair, generated for this file and never funded. Not a
+#: secret by any definition that matters: it exists so `from_env_value` has 64
+#: bytes to parse, and the suite never touches a network.
+DEPOSIT_KEYPAIR = (
+    "4qqPR89ZbtNgjQkL26AreSyXFv4DwAVtF9JD9qRouAYcTfkCudE431gkZRhqzzwQHJPoY18LMthPLMarywdS4YxK"
+)
+
+
+@pytest.fixture
+def configured_keypair(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the route endpoints an address to derive.
+
+    Patches the *importing* module's attribute, not `app.chain.config`'s. Anything
+    that did `from app.core.config import get_settings` keeps its own reference, and
+    patching the source module leaves it untouched — a trap this repo has already
+    paid for once (WORKLOG, and `tests/test_lithic_adapter.py` says the same).
+    """
+    from app.chain.config import get_solana_settings
+
+    configured = get_solana_settings().model_copy(update={"deposit_keypair": DEPOSIT_KEYPAIR})
+    monkeypatch.setattr("app.api.funding.get_solana_settings", lambda: configured)
+
+
+async def test_a_route_names_the_address_this_service_watches(
+    client: httpx.AsyncClient, configured_keypair: None
+) -> None:
+    response = await client.post(
+        "/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD}
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["card_id"] == CARD
+    assert body["chain"] == "solana-devnet"
+    assert body["decimals"] == 6
+    # The token account, not the wallet. A fund screen showing the wallet collects
+    # deposits the watcher never sees — docs/ARCHITECTURE.md §9.8 in its other
+    # direction.
+    assert body["deposit_address"] != body["owner_address"]
+
+
+async def test_the_caller_cannot_choose_the_address(
+    client: httpx.AsyncClient, configured_keypair: None
+) -> None:
+    """The one that matters. An address is not a parameter.
+
+    A caller who could name one could point the watcher at somebody else's token
+    account and be credited for their deposits.
+    """
+    response = await client.post(
+        "/funding/deposit-routes",
+        json={"provider_id": PROVIDER, "card_id": CARD, "deposit_address": "AttackerOwned111"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["deposit_address"] != "AttackerOwned111"
+
+
+async def test_opening_the_fund_screen_twice_is_a_no_op(
+    client: httpx.AsyncClient, configured_keypair: None
+) -> None:
+    # `funding/routes.py` was written for this: "the fund screen will do it every
+    # time it is opened".
+    first = await client.post(
+        "/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD}
+    )
+    second = await client.post(
+        "/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD}
+    )
+
+    assert first.json() == second.json()
+
+
+async def test_routes_can_be_read_back_for_a_card(
+    client: httpx.AsyncClient, configured_keypair: None
+) -> None:
+    await client.post("/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD})
+
+    listed = await client.get(
+        "/funding/deposit-routes", params={"provider_id": PROVIDER, "card_id": CARD}
+    )
+
+    assert listed.status_code == 200
+    assert len(listed.json()) == 1
+
+
+async def test_a_card_with_no_route_lists_nothing_rather_than_404(
+    client: httpx.AsyncClient, configured_keypair: None
+) -> None:
+    listed = await client.get(
+        "/funding/deposit-routes", params={"provider_id": PROVIDER, "card_id": "card_fresh"}
+    )
+
+    assert listed.status_code == 200
+    assert listed.json() == []
+
+
+async def test_an_unconfigured_keypair_says_which_setting_is_missing(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 503 and the variable's name: the difference between a two-minute fix and an
+    # investigation. Phase 4 recorded the same rule for the webhook secret (§8.11).
+    from app.chain import config as chain_config
+
+    settings = chain_config.get_solana_settings()
+    monkeypatch.setattr(
+        "app.api.funding.get_solana_settings",
+        lambda: settings.model_copy(update={"deposit_keypair": ""}),
+    )
+
+    response = await client.post(
+        "/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD}
+    )
+
+    assert response.status_code == 503
+    assert "SOLANA_DEPOSIT_KEYPAIR" in response.text
+
+
+async def test_an_unusable_keypair_says_so_rather_than_500ing(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.chain import config as chain_config
+
+    settings = chain_config.get_solana_settings()
+    monkeypatch.setattr(
+        "app.api.funding.get_solana_settings",
+        lambda: settings.model_copy(update={"deposit_keypair": "not-a-keypair"}),
+    )
+
+    response = await client.post(
+        "/funding/deposit-routes", json={"provider_id": PROVIDER, "card_id": CARD}
+    )
+
+    assert response.status_code == 503
+    assert "unusable" in response.text

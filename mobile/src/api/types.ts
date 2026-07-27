@@ -143,6 +143,23 @@ export interface FundingIntentPage {
   intents: FundingIntent[];
 }
 
+/**
+ * Where to send money so that it reaches one card (SPEC.md §9.3).
+ *
+ * `deposit_address` is the *source* — the token account the backend watches. The
+ * card's own Safe is the destination and lives on `Card.deposit_address`. They are
+ * different addresses and confusing them is the mistake ARCHITECTURE §9.8 records.
+ */
+export interface DepositRoute {
+  chain: string;
+  deposit_address: string;
+  owner_address: string;
+  mint: string;
+  decimals: number;
+  provider_id: string;
+  card_id: string;
+}
+
 // --- 3DS / OTP (SPEC.md §6) -------------------------------------------------
 
 export interface PendingChallenge {
