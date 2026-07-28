@@ -2946,7 +2946,26 @@ before, and a test holds both halves.
 - **The read, against BSC testnet.** 0.35 USDC observed at the real address, $0.20
   then $0.15 funded, and the next cent `PENDING` — the invariant holding on real chain
   state, with nothing stranded.
-- **Not verified:** a full engine run from a fresh devnet deposit through Wormhole to a
-  card funded on the delivered balance. Each leg is verified on its own and the join is
-  not. It needs a bridge transfer executed with the fund screen open, which is a demo
-  to record rather than a thing to build.
+- **The join, run for real on 2026-07-28.** The thing §13.1 said no testnet could
+  close, closed as far as a testnet can:
+
+  | | |
+  | --- | --- |
+  | Safe before | **0.35 USDC** on BSC testnet |
+  | Solana devnet source | signature `3NsTQdifm4e789emqisfEc3FVA9h9Cg4ZLBhEia15J5jvYduNjMKroQdRJUbBGFGQsjWynpVLhLgBARwHkMtahXA` |
+  | Wormhole transfer | `1/3b26409f…ca98/56920`, guardians signed, redeemed on BSC testnet |
+  | Safe after | **0.60 USDC** — read back off the chain, not asserted |
+  | funded | `$0.25` then `$0.35` → both `succeeded`, on `balanceOf` evidence |
+  | the next cent | `pending` — 0.60 was exactly what the chain held |
+
+  Real devnet USDC left a real wallet, crossed a real bridge, arrived at a real
+  address, and a card was funded on the balance that address actually holds. Nothing
+  in that chain was told; every step was read.
+
+- **Still not verified: the engine orchestrating it.** The run above drove the adapter
+  directly. A `TopUpEngine` run — an intent walking `PENDING → … → FUNDED` with the
+  real Wormhole bridge and the on-chain Safe underneath — exercises the same
+  components through the state machine, and has not been done. Nor has the watcher
+  creating the intent from a fresh deposit, which needs USDC sent *to* the watched ATA
+  by a wallet that is not the one that owns it — the app's in-app wallet is the
+  intended sender and has no funds yet.
