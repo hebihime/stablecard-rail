@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from solders.pubkey import Pubkey
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.chain.bridge.build import BridgeChoice, build_bridge
 from app.chain.config import get_solana_settings
@@ -126,6 +127,9 @@ async def main() -> int:
         )
         await session.commit()
 
+        # Annotated, because mypy otherwise infers the type from this first branch
+        # and then reads the `None` check below as unreachable.
+        intent_id: uuid.UUID | None
         if args.intent is not None:
             intent_id = uuid.UUID(args.intent)
             heading("resuming an intent the watcher already opened")
@@ -141,7 +145,9 @@ async def main() -> int:
     return 0
 
 
-async def _open_from_chain(session, watcher):  # type: ignore[no-untyped-def]
+async def _open_from_chain(
+    session: AsyncSession, watcher: SolanaDepositWatcher
+) -> uuid.UUID | None:
     heading("watching the chain for a deposit")
     report = await collect_deposits(session, watcher)
     print(
@@ -161,7 +167,12 @@ async def _open_from_chain(session, watcher):  # type: ignore[no-untyped-def]
     return intent_id
 
 
-async def _walk(session, engine, intent_id, args):  # type: ignore[no-untyped-def]
+async def _walk(
+    session: AsyncSession,
+    engine: TopUpEngine,
+    intent_id: uuid.UUID,
+    args: argparse.Namespace,
+) -> None:
     for step in range(1, args.max_steps + 1):
         outcome = await engine.step(session, intent_id)
         moved = "->" if outcome.progressed else "  "
@@ -177,7 +188,7 @@ async def _walk(session, engine, intent_id, args):  # type: ignore[no-untyped-de
         await asyncio.sleep(args.interval)
 
 
-async def _print_ledger(session, intent_id):  # type: ignore[no-untyped-def]
+async def _print_ledger(session: AsyncSession, intent_id: uuid.UUID) -> None:
     heading("the ledger for this intent")
     rows = (
         await session.execute(
@@ -192,7 +203,8 @@ async def _print_ledger(session, intent_id):  # type: ignore[no-untyped-def]
             or ""
         )
         print(
-            f"  {row.event_type:<32} {row.state_before!s:<20} -> {row.state_after!s:<20} {str(ref)[:44]}"
+            f"  {row.event_type:<32} {row.state_before!s:<20}"
+            f" -> {row.state_after!s:<20} {str(ref)[:44]}"
         )
 
     print(f"\n  GET /ledger?intent_id={intent_id}")

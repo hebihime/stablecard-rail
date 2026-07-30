@@ -611,7 +611,7 @@ class GnosisPaySimulator:
         once could. So there is exactly **one unattributed deposit per Safe**, resized
         to whatever the chain shows beyond what has already been attributed.
 
-        **The invariant: unattributed units == max(0, on-chain − attributed).**
+        **The invariant: unattributed units == max(0, on-chain minus attributed).**
         Attribution to cards is bounded by unattributed deposits already, so bounding
         those by the chain bounds the cards by the chain. That is what a
         crypto-deposit issuer enforces, and unlike a simulation it can be checked
