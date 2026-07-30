@@ -2962,7 +2962,37 @@ before, and a test holds both halves.
   address, and a card was funded on the balance that address actually holds. Nothing
   in that chain was told; every step was read.
 
-- **Still not verified: the engine orchestrating it.** The run above drove the adapter
+- **The engine orchestrating it, run 2026-07-30** — `scripts/demo_end_to_end.py`.
+  A deposit sent from a throwaway wallet into the watched ATA (a deposit is an
+  *incoming* balance change, so the owner cannot deposit to itself — the one
+  non-obvious part of setting this up), the watcher opening intent
+  `bef1b0a6-1a6d-4715-9c6e-f7e37e7a9408`, and the engine walking it:
+
+  ```
+  PENDING -> DEPOSIT_CONFIRMED -> BRIDGING -> (retry) -> BRIDGED   real Wormhole delivery
+  BRIDGED -> FUNDING -> retry x4 -> FAILED_FUNDING                 the Safe could not cover it
+  ```
+
+  **It failed, and the failure is the most valuable thing in this section.** The
+  intent's amount exceeded what the Safe actually held, so `fund_card` answered
+  `PENDING` — for a real reason, off a real chain — the engine retried in place to
+  `FUNDING_MAX_RETRIES`, and the cap took it to `FAILED_FUNDING`. Every one of those
+  steps is spec'd behaviour (SPEC.md §5.3 mandates a cap) and none of them had ever
+  run against real components: with the simulator, `fund_card` succeeds immediately
+  and that whole path is unreachable.
+
+  It is also, exactly, the open question already recorded in the worklog about a
+  post-lock intent reaching a `FAILED_*` state: the bridged money is sitting in the
+  Safe, deliverable, and the intent is terminal. **The state reads worse than the
+  situation is**, and now there is a real intent id and a real ledger demonstrating
+  it rather than an argument about it. Whether to exempt post-lock states from the
+  cap, or add a state meaning "needs a human", is still jp's call and still a SPEC
+  change.
+
+  The ledger for that intent is the artifact §7 exists for: eleven rows, the deposit
+  signature on the first, every transition and every retry in order.
+
+- **Still not verified:** The run above drove the adapter
   directly. A `TopUpEngine` run — an intent walking `PENDING → … → FUNDED` with the
   real Wormhole bridge and the on-chain Safe underneath — exercises the same
   components through the state machine, and has not been done. Nor has the watcher
